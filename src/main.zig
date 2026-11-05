@@ -60,7 +60,7 @@ inline fn flags(args: std.process.Args.Iterator) Error!Args {
         return Error.InvalidThreadCount;
 
     return Args{
-        .path = path, // TODO debug
+        .path = path,
         .threads = threads,
     }; // TODO: dequant target
 }
@@ -81,7 +81,7 @@ pub fn main(init: std.process.Init) !void {
         .io = init.io,
         .in = in,
         .out = undefined,
-        .start = 0, //TODO check how .safetensor are made
+        .start = 0, //TODO check .safetensor format
         .size = size,
         .chunk = @intCast((size + CHUNK_SIZE - 1) / CHUNK_SIZE),
     };
