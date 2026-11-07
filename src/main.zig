@@ -1,72 +1,78 @@
 const std = @import("std");
+const generic = @import("generic.zig");
+const types = @import("types.zig");
+const safetensors = @import("safetensors.zig");
 
-const CACHE_LINE = 64;
-const CHUNK_SIZE = 0x40000; // 256KiB
-
-const Error = error{
-    InvalidThreadCount,
-    InvalidFile,
-};
-
-const Shared = struct {
-    io: std.Io,
-    in: std.Io.File,
-    out: std.Io.File,
-    start: u64,
-    size: u64,
-    chunk: usize,
-    next: std.atomic.Value(usize) = .init(0), // id
-};
 
 fn worker(shared: *Shared) !void {
-    var buf: [CHUNK_SIZE]u8 align(CACHE_LINE) = undefined;
+    var buf: [generic.CHUNK_SIZE]u8 align(generic.CACHE_LINE) = undefined;
+    var scales_buf: [generic.SCALES_SIZE]u8 align(generic.CACHE_LINE) = undefined;
 
-    while (true) { //TODO how/where to async/prefetch next chunk
-        const chunk = shared.next.fetchAdd(1, .monotonic);
-        if (chunk >= shared.chunk) return;
+    var weights_reader = shared.in.reader(shared.io, &buf); //pread
+    var scales_reader = shared.in.reader(shared.io, &scales_buf);
 
-        const offset = chunk * CHUNK_SIZE;
-        const len: usize = @intCast(@min(CHUNK_SIZE, shared.size - offset));
+    while (true) { //TODO is prefetch right ?
+        const chunk_idx = shared.next.fetchAdd(1, .monotonic); //no sync
+        if (chunk_idx >= shared.chunks.len) return; // all done
+        const chunk = shared.chunks[chunk_idx];
 
-        const bytes = try blk: {
-            var reader = shared.in.reader(shared.io, buf[0..len]); //posix
-            try reader.seekTo(offset);
-            break :blk reader.interface.take(len);
-        };
+        //READ
+        try weights_reader.seekTo(chunk.offset);
+        const pweights = try weights_reader.interface.take(chunk.len);
+        try scales_reader.seekTo(chunk.scales_offset);
+        const scales = try scales_reader.interface.take(chunk.scales_len);
 
-        //TODO WORK
-
-        try shared.in.writePositionalAll(shared.io, bytes, offset);
+        //TODO WORK: switch chunk.tag inline else x dequant_dtype inline else -> dequantRows
+        _ = pweights;
+        _ = scales;
     }
 }
 
 const Args = struct {
     path: []const u8,
+    dequant_dtype: types.Dtype,
     threads: usize,
 };
 
-inline fn flags(args: std.process.Args.Iterator) Error!Args {
+inline fn flags(args: std.process.Args.Iterator) generic.Error!Args {
     var it = args;
-    _ = it.next();
-    const path = if (it.next()) |path| path else return Error.InvalidFile;
+    _ = it.skip();
 
+    //.SAFETENSORS
+    const path = if (it.next()) |path| path else return generic.Error.InvalidFile;
+
+    //DEQUANT TYPE
+    const stype = it.next() orelse return generic.Error.MissingTypeArgument;
+    const dequant_type = std.meta.stringToEnum(
+        types.Dtype,
+        stype,
+    ) orelse return generic.Error.InvalidTypeArgument;
+
+    //THREADPOOL
     const max_threads = std.Thread.getCpuCount() catch 1;
     const threads = if (it.next()) |str|
-        std.fmt.parseInt(usize, str, 10) catch return Error.InvalidThreadCount
+        std.fmt.parseInt(usize, str, 10) catch return generic.Error.InvalidThreadCount
     else
         max_threads;
 
     if (threads == 0 or threads > max_threads)
-        return Error.InvalidThreadCount;
+        return generic.Error.InvalidThreadCount;
 
+    
     return Args{
         .path = path,
+        .dequant_dtype = dequant_type,
         .threads = threads,
-    }; // TODO: dequant target
+    };
 }
 
-
-
+const Shared = struct {
+    next: std.atomic.Value(usize) align(generic.CACHE_LINE) = .init(0), // done/in-progress
+    io: std.Io,
+    chunks: []const safetensors.Chunk,
+    in: std.Io.File,
+    dequant_dtype: types.Dtype,
+};
 
 pub fn main(init: std.process.Init) !void {
     const args = try flags(init.minimal.args.iterate());
@@ -75,32 +81,25 @@ pub fn main(init: std.process.Init) !void {
     const in = try std.Io.Dir.cwd().openFile(init.io, args.path, .{});
     defer in.close(init.io);
 
-    const size = (try in.stat(init.io)).size;
+    //HEADER MAPING
+    const chunks = try safetensors.parseHeader(in, init.io, init.gpa); // parse once
+                                                                                             // json isn't that big
+                                                                                             // check simdjson interop
+    defer init.gpa.free(chunks);
 
-    var shared: Shared = .{ // in ctx
+    var shared: Shared = .{
         .io = init.io,
+        .chunks = chunks,
         .in = in,
-        .out = undefined,
-        .start = 0, //TODO check .safetensor format
-        .size = size,
-        .chunk = @intCast((size + CHUNK_SIZE - 1) / CHUNK_SIZE),
+        .dequant_dtype = args.dequant_dtype,
     };
 
     //THREADPOOL
     const threads: []std.Thread = try init.gpa.alloc(std.Thread, args.threads);
+    defer init.gpa.free(threads);
     for (threads) |*thread| {
         thread.* = try std.Thread.spawn(.{}, worker, .{&shared});
     }
 
     for (threads) |thread| thread.join();
 }
-
-
-// SAFETENSOR WIKI:
-// first 8bytes: header size, as little u64
-// header: model archi with obj.idx.param_type:{dtype, shape, data_offset}
-// 
-// about NVFP4:
-// - no "NVFP4" definition in `dtype`. 
-// check if in u8 + .weight|_packed + .weight_scale=F8_E4M3
-//      
