@@ -80,7 +80,9 @@ pub inline fn encode(comptime dtype: types.Dtype, comptime count: usize, values:
             const Lanes = @Vector(count, u32);
             const bits: Lanes = @bitCast(values);
             const midbit = (bits >> @splat(16)) & @as(Lanes, @splat(1)); // extract lsb high-u16 as lsb low-u16
-            const rounded = bits +% (@as(Lanes, @splat(0x7FFF)) +% midbit); // 0x7FFF is u16-1 (midbit extracted)
+                                                                         // used for even/odd
+                                                                         // if value is median bf16 representation we round based on even/odd (defined thanks the bf16 being half f32)
+            const rounded = bits +% @as(Lanes, @splat(0x7FFF)) +% midbit; // 0x7FFF is u16-1 (midbit extracted)
                                                                             // by adding midbit, it will "snowball" its way to the upper u16 if +1(rounding) is necessary
                                                                             // then sum to raw bits to "apply" it. (faster than shift+&)
             return @as(@Vector(count, u16), @truncate(rounded >> @splat(16)));

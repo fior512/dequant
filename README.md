@@ -31,9 +31,9 @@ Where usually i use LLMs to confront my design hypothesis, i chose not to for th
 
 ## Bench
 
-Setup: AMD Ryzen 5 7600X 6-Core Processor
-Machine states: epp: perf, boost and SMT on, unpinned freq
-Protocol: 3 runs per permutation, taskset, 1/6/12 threads, 5 models, input nvfp4 only, f32/f16/bf16 as outputs
+Setup: AMD Ryzen 5 7600X 6-Core Processor\
+Machine states: epp: perf, boost and SMT on, unpinned freq\
+Protocol: 3 runs per permutation, taskset, 1/6/12 threads, 5 models, input nvfp4 only, f32/f16/bf16 as outputs\
 tools: perf stat/report, llvm-mca and MAQAO CQA
 
 **Models**:
@@ -96,7 +96,7 @@ tools: perf stat/report, llvm-mca and MAQAO CQA
 ### Dequantization
 
 | out_t | unpack | scale load | decode | translate | encode |
-|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|
 | f32 | 16% | 13% | 52% | 5% | 9% |
 | f16 | 12% | 14% | 43% | 3% | 26% |
 | bf16 | 11% | 10% | 43% | 4% | 26% |
@@ -170,4 +170,4 @@ code: kernels only (no file read nor orchestration).
 - `_copy_to_iter`(memcpy) inside `std.Io.Reader.interface.take`
 - mostly backend-bound
 - decode is 12 instr/block
-- `unpack()` use mm128
+- `unpack()` use mm128bold text
