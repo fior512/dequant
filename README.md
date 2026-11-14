@@ -38,13 +38,13 @@ tools: perf stat/report, llvm-mca and MAQAO CQA
 
 **Models**:
 
-| Label | Hugging Face repo, file | Size | Quantized layers | Quantized bytes | binary : json |
+| Label | Hugging Face repo, file | Size | Quantized layers | Quantized bytes | binary:json |
 |---|---|---|---|---|---|
-| whisper | `Reza2kn/Mojtabazarrin_whisper-base-fa-NVFP4`, `model.safetensors` | 0.13 GiB | 96 | 16% | 2,621 : 1 |
-| glm-ocr | `AlphaOxO/GLM-OCR-NVFP4`, `model.safetensors` | 1.27 GiB | 120 | 22% | 14,886 : 1 |
-| wan22 | `changwangss/Wan2.2-T2V-A14B-Diffusers-NVFP4-RTN`, `transformer/diffusion_pytorch_model-00001-of-00002.safetensors` | 4.65 GiB | 228 | 80% | 36,361 : 1 |
-| qwen-image | `darrellbest/Qwen-Image-2.1-PE-I2I-Heretic-NVFP4`, `model.safetensors` | 10.43 GiB | 128 | 24% | 78,456 : 1 |
-| qwen36 | `RedHatAI/Qwen3.6-35B-A3B-NVFP4`, `model.safetensors` | 20.92 GiB | 30,880 | 73% | 1,284 : 1 |
+| whisper | `Reza2kn/Mojtabazarrin_whisper-base-fa-NVFP4`, `model.safetensors` | 0.13 GiB | 96 | 16% | 2,621:1 |
+| glm-ocr | `AlphaOxO/GLM-OCR-NVFP4`, `model.safetensors` | 1.27 GiB | 120 | 22% | 14,886:1 |
+| wan22 | `changwangss/Wan2.2-T2V-A14B-Diffusers-NVFP4-RTN`, `transformer/diffusion_pytorch_model-00001-of-00002.safetensors` | 4.65 GiB | 228 | 80% | 36,361:1 |
+| qwen-image | `darrellbest/Qwen-Image-2.1-PE-I2I-Heretic-NVFP4`, `model.safetensors` | 10.43 GiB | 128 | 24% | 78,456:1 |
+| qwen36 | `RedHatAI/Qwen3.6-35B-A3B-NVFP4`, `model.safetensors` | 20.92 GiB | 30,880 | 73% | 1,284:1 |
 
 
 ### Global
