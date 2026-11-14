@@ -1,77 +1,127 @@
 const std = @import("std");
-const generic = @import("generic.zig");
 const types = @import("types.zig");
 const safetensors = @import("safetensors.zig");
+const dequant = @import("dequant.zig");
+
+const CACHE_LINE = std.atomic.cache_line; // 128 x86
+const CHUNK_SIZE = 0x40000; // 256KiB, packed weights per chunk
+const SCALES_SIZE = CHUNK_SIZE / 8; // smallest scale block: nvfp4 16 elements -> 8 B -> 1 scale
+
+
+const max_weights_per_byte = blk: {
+    var max_count: usize = 0;
+    for (std.enums.values(types.Scheme)) |scheme| {
+        const weight_t = types.Scheme.RECIPE.get(scheme).weight;
+        max_count = @max(max_count, 8 / types.Dtype.RECIPE.get(weight_t).bits);
+    }
+    break :blk max_count;
+};
+
+const max_out_value_size = blk: {
+    var max_size: usize = 0;
+    for (std.enums.values(types.Dtype)) |dtype| {
+        const recipe = types.Dtype.RECIPE.get(dtype);
+        if (recipe.encodable) max_size = @max(max_size, recipe.bits / 8);
+    }
+    break :blk max_size;
+};
+const OUT_SIZE = CHUNK_SIZE * max_weights_per_byte * max_out_value_size;
 
 
 fn worker(shared: *Shared) !void {
-    var buf: [generic.CHUNK_SIZE]u8 align(generic.CACHE_LINE) = undefined;
-    var scales_buf: [generic.SCALES_SIZE]u8 align(generic.CACHE_LINE) = undefined;
+    var weight_buf: [CHUNK_SIZE]u8 align(CACHE_LINE) = undefined;
+    var scales_buf: [SCALES_SIZE]u8 align(CACHE_LINE) = undefined;
+    var out_buf: [OUT_SIZE]u8 align(CACHE_LINE) = undefined;
 
-    var weights_reader = shared.in.reader(shared.io, &buf); //pread
+    var weight_reader = shared.in.reader(shared.io, &weight_buf);
     var scales_reader = shared.in.reader(shared.io, &scales_buf);
+    const out_bits: usize = types.Dtype.RECIPE.get(shared.dequant_t).bits; // TODO: better name, this is single weight bits size
 
-    while (true) { //TODO is prefetch right ?
-        const chunk_idx = shared.next.fetchAdd(1, .monotonic); //no sync
-        if (chunk_idx >= shared.chunks.len) return; // all done
-        const chunk = shared.chunks[chunk_idx];
+    while (true) {
+        const layer_idx = shared.next.fetchAdd(1, .monotonic); // no sync
+        if (layer_idx >= shared.layers.len) return; // done
+        
+        const layer = shared.layers[layer_idx];
+        try weight_reader.seekTo(layer.weight_offset);
+        try scales_reader.seekTo(layer.scale_offset);
 
-        //READ
-        try weights_reader.seekTo(chunk.offset);
-        const pweights = try weights_reader.interface.take(chunk.len);
-        try scales_reader.seekTo(chunk.scales_offset);
-        const scales = try scales_reader.interface.take(chunk.scales_len);
+        var rem_size = layer.weight_size;
+        while (rem_size>0) {
+            const weight_size: usize = @intCast(@min(CHUNK_SIZE, rem_size));
+            rem_size -= weight_size;
+            const weights = try weight_reader.interface.take(weight_size);
 
-        //TODO WORK: switch chunk.tag inline else x dequant_dtype inline else -> dequantRows
-        _ = pweights;
-        _ = scales;
+            // FAST PATH (not quantized weights)
+            const scheme = layer.scheme orelse {
+                std.mem.doNotOptimizeAway(weights); // whatever endpoint we need to send weights to (cluster V|RAM, writer, ..)
+                continue;
+            };
+
+            // DEQUANT
+            const weight_bits: usize = types.Dtype.RECIPE.get(types.Scheme.RECIPE.get(scheme).weight).bits;
+            const scales = try scales_reader.interface.take(weight_size / scheme.BlockSize() * scheme.ScaleSize());
+            const out = out_buf[
+                0..weight_size 
+                * 8 // bytes -> bits
+                / weight_bits // how many weights
+                * out_bits // output bits
+                / 8 // bits -> bytes
+            ]; 
+
+            dequant.dequant(scheme, shared.dequant_t, .{
+                .weights = weights,
+                .scales = scales,
+                .midpoint = &.{},
+                .global_scale = layer.global_scale,
+            }, out);
+
+            std.mem.doNotOptimizeAway(out); //endpoint
+        }
     }
 }
 
 const Args = struct {
     path: []const u8,
-    dequant_dtype: types.Dtype,
+    dequant_t: types.Dtype,
     threads: usize,
 };
 
-inline fn flags(args: std.process.Args.Iterator) generic.Error!Args {
+inline fn flags(args: std.process.Args.Iterator) !Args {
     var it = args;
     _ = it.skip();
 
     //.SAFETENSORS
-    const path = if (it.next()) |path| path else return generic.Error.InvalidFile;
+    const path = if (it.next()) |path| path else @panic("Args: missing .safetensors path");
 
     //DEQUANT TYPE
-    const stype = it.next() orelse return generic.Error.MissingTypeArgument;
+    const stype = it.next() orelse @panic("Args: Missing dequantization type");
     const dequant_type = std.meta.stringToEnum(
         types.Dtype,
         stype,
-    ) orelse return generic.Error.InvalidTypeArgument;
+    ) orelse @panic("Args: Unknown dequant type");
 
     //THREADPOOL
     const max_threads = std.Thread.getCpuCount() catch 1;
     const threads = if (it.next()) |str|
-        std.fmt.parseInt(usize, str, 10) catch return generic.Error.InvalidThreadCount
+        std.fmt.parseInt(usize, str, 10) catch @panic("Args: Invalid thread count")
     else
         max_threads;
 
-    if (threads == 0 or threads > max_threads)
-        return generic.Error.InvalidThreadCount;
-
+    if (threads == 0 or threads > max_threads) @panic("Args: Invalid thread count");
     
     return Args{
         .path = path,
-        .dequant_dtype = dequant_type,
+        .dequant_t = dequant_type,
         .threads = threads,
     };
 }
 
 const Shared = struct {
-    next: std.atomic.Value(usize) align(generic.CACHE_LINE) = .init(0), // done/in-progress
+    next: std.atomic.Value(usize) align(CACHE_LINE) = .init(0), // done/in-progress
     io: std.Io,
-    chunks: []const safetensors.Chunk,
+    layers: []const safetensors.Layer,
     in: std.Io.File,
-    dequant_dtype: types.Dtype,
+    dequant_t: types.Dtype,
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -82,16 +132,15 @@ pub fn main(init: std.process.Init) !void {
     defer in.close(init.io);
 
     //HEADER MAPING
-    const chunks = try safetensors.parseHeader(in, init.io, init.gpa); // parse once
-                                                                                             // json isn't that big
-                                                                                             // check simdjson interop
-    defer init.gpa.free(chunks);
+    const layers = try safetensors.parseJson(in, init.io, init.arena.allocator()); // per threads (ratio json/binary bytes is really big)
+                                                                                                        // or
+                                                                                                        // single specialized thread looping (multi .safet K3)
 
     var shared: Shared = .{
         .io = init.io,
-        .chunks = chunks,
+        .layers = layers,
         .in = in,
-        .dequant_dtype = args.dequant_dtype,
+        .dequant_t = args.dequant_t,
     };
 
     //THREADPOOL
@@ -102,4 +151,23 @@ pub fn main(init: std.process.Init) !void {
     }
 
     for (threads) |thread| thread.join();
+}
+
+
+
+test "nvfp4 to f32" { // Vibecoded
+    const weights = [_]u8{0x7A} ** 8; // 16 weights
+    const scales = [_]u8{0x38}; //e4m1 1.0
+    var out: [16 * 4]u8 align(4) = undefined;
+
+    dequant.dequant(.nvfp4, .f32, .{
+        .weights = &weights,
+        .scales = &scales,
+        .midpoint = &.{},
+        .global_scale = 2.0
+    }, &out);
+
+    const values: *const [16]f32 = @ptrCast(&out);
+    try std.testing.expectEqual(@as(f32, -2.0), values[0]);
+    try std.testing.expectEqual(@as(f32, 12.0), values[1]);
 }
