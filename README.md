@@ -69,7 +69,7 @@ tools: perf stat/report, llvm-mca and MAQAO CQA
 | | 6 | 1009 ms | 51.4 ms | 956 ms | 21.9 | 34.1 G | 41% |
 | | 12 | 910 ms | 51.8 ms | 857 ms | 24.4 | 38.0 G | 127% |
 
-> GiB/s: (bytes read) / process time (`time` adds 1ms)
+> GiB/s: (bytes read) / process time (`time` adds 1ms)\
 > Idle: (Threads*100) - CPU usage (rusage)
 
 **stats**:
@@ -150,8 +150,8 @@ tools: perf stat/report, llvm-mca and MAQAO CQA
 
 **Kernel against llama.cpp**:
 
-output: f32
-threads: 1
+output: f32\
+threads: 1\
 code: kernels only (no file read nor orchestration).
 
 | Values | Fits in | llama.cpp min cycles / 32 values | dequant | Speedup | llama.cpp f32 GB/s | dequant |

@@ -53,7 +53,7 @@ fn worker(shared: *Shared) !void {
 
             // FAST PATH (not quantized weights)
             const scheme = layer.scheme orelse {
-                std.mem.doNotOptimizeAway(weights); // whatever endpoint we need to send weights to (cluster V|RAM, writer, ..)
+                std.mem.doNotOptimizeAway(weights); // endpoint
                 continue;
             };
 
