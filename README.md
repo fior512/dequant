@@ -23,11 +23,8 @@ For the sake of the benchmark, since there are no real endpoints, everything is 
 
 #### Details:
 
-- the entire dequant module is modular via `types.Dtype` and `types.Scheme`, which both contain *"recipes"*, then only the `switch() {}`s need to be aligned if new types comes in. 
+- the entire dequant module is modular via `types.Dtype` and `types.Scheme`, which both contain *"recipes"*, then only the `switch()`s need to be aligned if new types comes in. 
 - No c-interop for simdjson since `parseJson()` is nowhere near being a bottleneck (see below). 
-
-AI has only been only used to search for syntax (primarily for json parsing), parsing as array the performance metrics below and generating test cases to verify accuracy.
-Where usually i use LLMs to confront my design hypothesis, i chose not to for this repo.
 
 ## Bench
 

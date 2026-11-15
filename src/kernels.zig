@@ -1,3 +1,4 @@
+const std = @import("std");
 const types = @import("types.zig");
 
 pub inline fn unpack(comptime format: types.Dtype.Recipe, comptime count: usize, bytes: *const [count * format.bits / 8]u8) @Vector(count, u8) {
@@ -81,13 +82,11 @@ pub inline fn encode(comptime dtype: types.Dtype, comptime count: usize, values:
             const bits: Lanes = @bitCast(values);
             const midbit = (bits >> @splat(16)) & @as(Lanes, @splat(1)); // extract lsb high-u16 as lsb low-u16
                                                                          // used for even/odd
-                                                                         // if value is median bf16 representation we round based on even/odd (defined thanks the bf16 being half f32)
+                                                                         // if value is halfway (2..2.5..3) -> round based on even/odd
             const rounded = bits +% @as(Lanes, @splat(0x7FFF)) +% midbit; // 0x7FFF is u16-1 (midbit extracted)
-                                                                            // by adding midbit, it will "snowball" its way to the upper u16 if +1(rounding) is necessary
-                                                                            // then sum to raw bits to "apply" it. (faster than shift+&)
+                                                                            // by adding midbit, it will "snowball" its way to the upper u16 if round+1 is necessary
             return @as(@Vector(count, u16), @truncate(rounded >> @splat(16)));
         },
         else => @compileError("encode: not encodable"),
     }
 }
-
