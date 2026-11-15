@@ -127,6 +127,9 @@ const Shared = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
+    const smp = std.heap.smp_allocator;
+    var arena = std.heap.ArenaAllocator.init(smp);
+
     const args = try flags(init.minimal.args.iterate());
 
     //FILE
@@ -137,7 +140,7 @@ pub fn main(init: std.process.Init) !void {
     const layers = try safetensors.parseJson(
         in,
         init.io,
-        init.arena.allocator(),
+        arena.allocator(),
     ); // per threads (ratio json/binary bytes is really big)
     // or
     // single specialized thread looping (multi .safet K3)
