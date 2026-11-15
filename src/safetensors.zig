@@ -5,13 +5,6 @@ const types = @import("types.zig");
 // [u64 .little header_size][json, header, header_size][binary data]
 // "name": { "dtype": "U8", "shape": [..], "data_offsets": [begin, end) } // absolute = 8+header_size+data_offsets
 // can contain "__metadata__" header apparently
-const Error = error{ //todo remove
-    InvalidHeader,
-    MissingScale,
-    MissingGlobalScale,
-    UnknownScheme,
-    ScaleLayout,
-};
 
 pub const Layer = struct {
     // offsets are in file-absolut
@@ -48,33 +41,32 @@ const Tensor = struct {
 };
 const Tensors = std.StringArrayHashMapUnmanaged(Tensor);
 
-pub fn parseJson(in: std.Io.File, io: std.Io, gpa: std.mem.Allocator) ![]Layer {
+pub fn parseJson(in: std.Io.File, io: std.Io, arena: std.mem.Allocator) ![]Layer {
     var buf: [4096]u8 = undefined;
     var reader = in.reader(io, &buf);
 
     //HEADER fetch
-    const header_size = reader.interface.takeInt(u64, .little) catch return Error.InvalidHeader;
+    const header_size = reader.interface.takeInt(u64, .little) catch return error.InvalidHeader;
     const start = 8 + header_size; // u64 + header
-    const bytes = try gpa.alloc(u8, header_size); // HEADER
+    const bytes = try arena.alloc(u8, header_size); // HEADER
     try reader.interface.readSliceAll(bytes);
 
     //JSON to name
-    const parsed = try std.json.parseFromSliceLeaky(
+    const tensors = &(try std.json.parseFromSliceLeaky(
         std.json.ArrayHashMap(Tensor),
-        gpa,
+        arena,
         bytes,
         .{ .ignore_unknown_fields = true}, // skip optional metadata
-    );
-    const tensors = &parsed.map; // TODO: unwrap
+    )).map;
     
     // PARSE
-    var layers: std.ArrayList(Layer) = try .initCapacity(gpa, tensors.count());
-    const isParsed = try gpa.alloc(bool, tensors.count());
+    var layers: std.ArrayList(Layer) = try .initCapacity(arena, tensors.count());
+    const isParsed = try arena.alloc(bool, tensors.count());
     @memset(isParsed, false);
 
     // parse quantized
     for (tensors.keys(), tensors.values()) |name, weight| {
-        const layer = try toLayer(gpa, tensors, isParsed, &reader, start, name, weight) orelse continue;
+        const layer = try toLayer(arena, tensors, isParsed, &reader, start, name, weight) orelse continue;
         layers.appendAssumeCapacity(layer);
     }
     
@@ -118,22 +110,22 @@ fn toLayer(
     const scale_name = try std.fmt.bufPrint(&name_buf, "{s}{s}", .{ prefix, header.scale });
     const scale_idx = tensors.getIndex(scale_name) orelse return null;
     const scale = tensors.values()[scale_idx];
-    const scale_t = types.Dtype.NameToDtype(scale.dtype) orelse return Error.UnknownScheme;
-    const scheme = types.Scheme.ScaleToScheme(scale_t) orelse return Error.UnknownScheme;
+    const scale_t = types.Dtype.NameToDtype(scale.dtype) orelse return error.UnknownScheme;
+    const scheme = types.Scheme.ScaleToScheme(scale_t) orelse return error.UnknownScheme;
 
 
     // SCALE LAYOUT
     const weight_size = weight.data_offsets[1] - weight.data_offsets[0];
     const scale_size = scale.data_offsets[1] - scale.data_offsets[0];
-    if (weight_size % scheme.BlockSize() != 0) return Error.ScaleLayout;
-    if (weight_size / scheme.BlockSize() * scheme.ScaleSize() != scale_size) return Error.ScaleLayout;
+    if (weight_size % scheme.BlockSize() != 0) return error.ScaleLayout;
+    if (weight_size / scheme.BlockSize() * scheme.ScaleSize() != scale_size) return error.ScaleLayout;
 
 
     // GLOBAL SCALE
     var global_scale: f32 = 1.0; // no global scale
     if (header.global) |global_suffix| {
         const global_name = try std.fmt.bufPrint(&name_buf, "{s}{s}", .{ prefix, global_suffix }); // TODO: obviously a better way to concat
-        const global_idx = tensors.getIndex(global_name) orelse return Error.MissingGlobalScale;
+        const global_idx = tensors.getIndex(global_name) orelse return error.MissingGlobalScale;
         
         try reader.seekTo(start + tensors.values()[global_idx].data_offsets[0]);
         global_scale = @bitCast(try reader.interface.takeInt(u32, .little));
@@ -141,15 +133,16 @@ fn toLayer(
         isParsed[global_idx] = true;
     }
 
-    if (weight.shape.len == 0) return Error.ScaleLayout;
+    if (weight.shape.len == 0) return error.ScaleLayout;
     const shape = try arena.dupe(u64, weight.shape);
     const weight_bits = types.Dtype.RECIPE.get(types.Scheme.RECIPE.get(scheme).weight).bits;
     shape[shape.len-1] *= 8/weight_bits;
 
     isParsed[scale_idx] = true;
     isParsed[tensors.getIndex(name).?] = true;
+
     return .{
-        .name = try std.fmt.allocPrint(arena, "{s}{s}", .{prefix, header.layer }),
+        .name = try std.fmt.bufPrint(&name_buf, "{s}{s}", .{prefix, header.layer }),
         .dtype = weight.dtype,
         .shape = shape,
         .weight_offset = start + weight.data_offsets[0],

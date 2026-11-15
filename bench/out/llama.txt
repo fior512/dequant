@@ -1,0 +1,16 @@
+llama.cpp: cpu 2, tsc 4.7000 GHz, trials 3 x >= 20 s, sleep 10 s
+llama.cpp L1    weights 4096 batch_reps 16384 out_hash 4353018041e5fa4c
+llama.cpp L1    trial 0  reps   10600448   2.1663 ticks/w   0.4609 ns/w    2.170 Gw/s     8.08 GiB/s out  wall 20.013 s
+llama.cpp L1    trial 1  reps   10616832   2.1640 ticks/w   0.4604 ns/w    2.172 Gw/s     8.09 GiB/s out  wall 20.023 s
+llama.cpp L1    trial 2  reps   10633216   2.1601 ticks/w   0.4596 ns/w    2.176 Gw/s     8.11 GiB/s out  wall 20.017 s
+llama.cpp L1    summary  min  0.4596  median  0.4604  max  0.4609 ns/w
+llama.cpp chunk weights 524288 batch_reps 128 out_hash 0bfc152d58befa35
+llama.cpp chunk trial 0  reps      81792   2.1938 ticks/w   0.4668 ns/w    2.142 Gw/s     7.98 GiB/s out  wall 20.017 s
+llama.cpp chunk trial 1  reps      81792   2.1929 ticks/w   0.4666 ns/w    2.143 Gw/s     7.98 GiB/s out  wall 20.008 s
+llama.cpp chunk trial 2  reps      81920   2.1920 ticks/w   0.4664 ns/w    2.144 Gw/s     7.99 GiB/s out  wall 20.031 s
+llama.cpp chunk summary  min  0.4664  median  0.4666  max  0.4668 ns/w
+llama.cpp DRAM  weights 67108864 batch_reps 1 out_hash e1cf54ea59c091d5
+llama.cpp DRAM  trial 0  reps        626   2.2392 ticks/w   0.4764 ns/w    2.099 Gw/s     7.82 GiB/s out  wall 20.015 s
+llama.cpp DRAM  trial 1  reps        626   2.2390 ticks/w   0.4764 ns/w    2.099 Gw/s     7.82 GiB/s out  wall 20.013 s
+llama.cpp DRAM  trial 2  reps        626   2.2386 ticks/w   0.4763 ns/w    2.099 Gw/s     7.82 GiB/s out  wall 20.010 s
+llama.cpp DRAM  summary  min  0.4763  median  0.4764  max  0.4764 ns/w

@@ -128,37 +128,21 @@ tools: perf stat/report, llvm-mca and MAQAO CQA
 | `out[..].* = @bitCast(encoded)` | encode | 9.1% | 25.6% | 5.8% |
 
 
-**Cycles per block of 16 weights**:
-
-| Source | f32 | f16 | bf16 | Stated bottleneck |
-|---|---|---|---|---|
-| `llvm-mca`, znver4 | 8.1 | 8.6 | 11.5 | vector ports, FP1 at 87 to 91% |
-| MAQAO CQA, ZEN_V4 | 6.25 | 7.0 | 7.75 | FP multiply unit |
-| Measured, user cycles | 10.7 | 12.3 | 15.7 | |
-
-| out_t | Instructions per iteration | Blocks per iteration | llvm-mca IPC | vec length efficiency (MAQAO) |
-|---|---|---|---|---|
-| f32 | 48 | 2 | 2.96 | 72% |
-| f16 | 48 | 2 | 2.78 | 72% |
-| bf16 | 31 | 1 | 2.69 | 77% |
-
-> all 3 out_t use 512-bits
-
-
 **Kernel against llama.cpp**:
 
 output: f32\
 threads: 1\
-code: kernels only (no file read nor orchestration).
+code: kernels only (no file read, parsing nor orchestration).
 
-| Values | Fits in | llama.cpp min cycles / 32 values | dequant | Speedup | llama.cpp f32 GB/s | dequant |
-|---|---|---|---|---|---|---|
-| 4,096 | L1 | 66.09 | 17.63 | 3.7x | 8.22 | 30.3 |
-| 65,536 | L2 | 67.65 | 18.08 | 3.7x | 8.12 | 30.3 |
-| 655,360 | L3 | 68.54 | 18.40 | 3.7x | 8.09 | 29.7 |
-| 65,536,000 | DRAM | 69.07 | 21.49 | 3.2x | 8.09 | 25.0 |
+| Size | Cache | Llama.cpp (med; ns/w) | This one (med; ns/w) | Ratio |
+|---|---|---|---|---|
+| 18 KiB | L1 | 0.4604 | 0.1288 | 3.57x |
+| 584 KiB | L2 | 0.4635 | 0.1294 | 3.58x|
+| 18 MiB | L3 | 0.4759 | 0.1302 | 3.66x |
+| 292 MiB | DRAM | 0.4764 | 0.1567 | 3.04x | 
 
 > their kernels comes from llama.cpp `tests/test-quantize-perf.cpp` (HEAD master 2026-11-13 20:27 UTC *ded522f8304554317e7ff8f88698dbbbca5425aa*)
+> `./bench/build.sh && ./bench/out/bench_llama && ./bench/out/bench_dequant`
 
 ---
 
@@ -168,3 +152,4 @@ code: kernels only (no file read nor orchestration).
 - mostly backend-bound
 - decode is 12 instr/block
 - `unpack()` use mm128bold text
+- `vcvtps2ph`
