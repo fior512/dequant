@@ -158,7 +158,7 @@ code: kernels only (no file read, parsing nor orchestration).
 
 
 
-**Kernels agaisat llama.cpp mxfp4 -> f32**
+**Kernels against llama.cpp mxfp4 -> f32**
 
 | Size | Cache | Llama.cpp (med; ns/w) | This one (med; ns/w) | Ratio |
 |---|---|---|---|---|
@@ -167,5 +167,5 @@ code: kernels only (no file read, parsing nor orchestration).
 | 18 MiB | L3 | 0.2674 | 0.1287 | 2.08x |
 | 292 MiB | DRAM | 0.2685 | 0.1461 | 1.84x | 
 
-> same protocol as above
-> ./bench/build.sh && bench/out/bench_llama mxfp4 && bench/out/bench_dequant mxfp4
+> same protocol as above\
+> `./bench/build.sh && bench/out/bench_llama mxfp4 && bench/out/bench_dequant mxfp4`
