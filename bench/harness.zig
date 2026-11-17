@@ -8,8 +8,8 @@ const E2M1_VALUES = [16]f32{ 0, 0.5, 1, 1.5, 2, 3, 4, 6, -0.0, -0.5, -1, -1.5, -
 
 pub const Logical = struct {
     nibbles: []u8, // weight_count, one e2m1 code per weight
-    scales: []u8, // weight_count / 16, one e4m3 code per sub block
-    reference: []f32, // weight_count, e2m1 * e4m3 in f32
+    scales: []u8, // weight_count / `scale_block_weight_count`, one e4m3|e8m0 code per scale block
+    reference: []f32, // weight_count, e2m1 * scale in f32
     weight_count: usize,
 };
 
@@ -19,11 +19,20 @@ const TrialResult = struct {
     wall_ns: u64,
 };
 
+pub fn ParseScheme(args: std.process.Args.Iterator) generic.Scheme {
+    var iterator = args;
+    _ = iterator.skip();
+    const scheme_name = iterator.next() orelse @panic("Args: missing scheme (nvfp4|mxfp4)");
+    return std.meta.stringToEnum(generic.Scheme, scheme_name) orelse @panic("Args: unknown scheme");
+}
+
 pub fn Main(comptime Kernel: type, comptime name: []const u8) !void {
+    const recipe = comptime generic.Scheme.RECIPE.get(Kernel.SCHEME);
     PinCpu(generic.PIN_CPU);
     const tsc_hz = CalibrateTscHz();
-    std.debug.print("{s}: cpu {d}, tsc {d:.4} GHz, trials {d} x >= {d} s, sleep {d} s\n", .{
+    std.debug.print("{s}: {t}, cpu {d}, tsc {d:.4} GHz, trials {d} x >= {d} s, sleep {d} s\n", .{
         name,
+        Kernel.SCHEME,
         generic.PIN_CPU,
         tsc_hz / 1e9,
         generic.TRIAL_COUNT,
@@ -37,7 +46,7 @@ pub fn Main(comptime Kernel: type, comptime name: []const u8) !void {
         defer arena.deinit();
         const allocator = arena.allocator();
 
-        const logical = try GenerateLogical(allocator, size.weight_count);
+        const logical = try GenerateLogical(Kernel.SCHEME, recipe, allocator, size.weight_count);
         const kernel = try Kernel.Prepare(allocator, &logical);
         const out = try allocator.alignedAlloc(f32, ALIGN, size.weight_count);
 
@@ -126,30 +135,34 @@ fn Trial(
     };
 }
 
-fn GenerateLogical(allocator: std.mem.Allocator, weight_count: usize) !Logical {
-    std.debug.assert(weight_count % 64 == 0);
+fn GenerateLogical(
+    comptime scheme: generic.Scheme,
+    comptime recipe: generic.Scheme.Recipe,
+    allocator: std.mem.Allocator,
+    weight_count: usize,
+) !Logical {
+    std.debug.assert(weight_count % recipe.llama_block_weight_count == 0);
+    std.debug.assert(weight_count % recipe.scale_block_weight_count == 0);
     const nibbles = try allocator.alignedAlloc(u8, ALIGN, weight_count);
-    const scales = try allocator.alignedAlloc(
-        u8,
-        ALIGN,
-        weight_count / generic.SUB_BLOCK_WEIGHT_COUNT,
-    );
+    const scales = try allocator.alignedAlloc(u8, ALIGN, weight_count / recipe.scale_block_weight_count);
     const reference = try allocator.alignedAlloc(f32, ALIGN, weight_count);
 
     var prng: std.Random.DefaultPrng = .init(generic.SEED);
     const random = prng.random();
     for (nibbles) |*nibble| nibble.* = random.int(u4);
-    for (scales) |*scale| scale.* = random.intRangeAtMost(u8, generic.SCALE_MIN, generic.SCALE_MAX);
+    for (scales) |*scale| scale.* = random.intRangeAtMost(u8, recipe.scale_min, recipe.scale_max);
 
-    // reference: e2m1 * ue4m3
+    // reference: e2m1 * scale
     for (reference, nibbles, 0..) |*value, nibble, weight_index| {
-        const scale_code = scales[weight_index / generic.SUB_BLOCK_WEIGHT_COUNT];
-        const exponent: i32 = (scale_code >> 3) & 0xF;
-        const mantissa: f32 = @floatFromInt(scale_code & 0x7);
-        const scale = if (exponent == 0) std.math.ldexp(
-            mantissa,
-            -9,
-        ) else std.math.ldexp(8 + mantissa, exponent - 10); // (1 + m/8) * 2^(e-7)
+        const scale_code = scales[weight_index / recipe.scale_block_weight_count];
+        const scale: f32 = switch (scheme) {
+            .nvfp4 => blk: { // ue4m3: (1 + m/8) * 2^(e-7), subnormal m * 2^-9
+                const exponent: i32 = (scale_code >> 3) & 0xF;
+                const mantissa: f32 = @floatFromInt(scale_code & 0x7);
+                break :blk if (exponent == 0) std.math.ldexp(mantissa, -9) else std.math.ldexp(8 + mantissa, exponent - 10);
+            },
+            .mxfp4 => std.math.ldexp(@as(f32, 1), @as(i32, scale_code) - 127), // e8m0: 2^(e-127)
+        };
         value.* = E2M1_VALUES[nibble] * scale;
     }
 
