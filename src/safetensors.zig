@@ -123,7 +123,7 @@ fn toLayer(
 
     // GLOBAL SCALE
     var global_scale: f32 = 1.0; // no global scale
-    if (header.global) |global_suffix| {
+    if (header.global) |global_suffix| if (types.Scheme.RECIPE.get(scheme).global_scale) {
         const global_name = try std.fmt.bufPrint(&name_buf, "{s}{s}", .{ prefix, global_suffix }); // TODO: obviously a better way to concat
         const global_idx = tensors.getIndex(global_name) orelse return error.MissingGlobalScale;
         
@@ -131,7 +131,7 @@ fn toLayer(
         global_scale = @bitCast(try reader.interface.takeInt(u32, .little));
         if (header.is_inverse) global_scale = 1.0 / global_scale; // turn back on
         isParsed[global_idx] = true;
-    }
+    };
 
     if (weight.shape.len == 0) return error.ScaleLayout;
     const shape = try arena.dupe(u64, weight.shape);
@@ -142,7 +142,7 @@ fn toLayer(
     isParsed[tensors.getIndex(name).?] = true;
 
     return .{
-        .name = try std.fmt.bufPrint(&name_buf, "{s}{s}", .{prefix, header.layer }),
+        .name = try std.fmt.allocPrint(arena, "{s}{s}", .{prefix, header.layer }),
         .dtype = weight.dtype,
         .shape = shape,
         .weight_offset = start + weight.data_offsets[0],

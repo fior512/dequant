@@ -32,6 +32,8 @@ Setup: AMD Ryzen 5 7600X 6-Core Processor\
 Machine states: epp: perf, boost and SMT on, unpinned freq\
 Protocol: 3 runs per permutation, taskset, 1/6/12 threads, 5 models, input nvfp4 only, f32/f16/bf16 as outputs\
 tools: perf stat/report, llvm-mca and MAQAO CQA
+Zig: 0.16, similar results in 0.17.1
+build: `zig build -Doptimize=ReleaseFast -Dcpu=native`
 
 **Models**:
 
@@ -128,7 +130,7 @@ tools: perf stat/report, llvm-mca and MAQAO CQA
 | `out[..].* = @bitCast(encoded)` | encode | 9.1% | 25.6% | 5.8% |
 
 
-**Kernel against llama.cpp**:
+**Kernel against llama.cpp nvfp4 -> f32**:
 
 output: f32\
 threads: 1\
@@ -142,7 +144,7 @@ code: kernels only (no file read, parsing nor orchestration).
 | 292 MiB | DRAM | 0.4764 | 0.1567 | 3.04x | 
 
 > their kernels comes from llama.cpp `tests/test-quantize-perf.cpp` (HEAD master 2026-11-13 20:27 UTC *ded522f8304554317e7ff8f88698dbbbca5425aa*)
-> `./bench/build.sh && ./bench/out/bench_llama && ./bench/out/bench_dequant`
+> `./bench/build.sh && ./bench/out/bench_llama nvfp4 && ./bench/out/bench_dequant nvfp4`
 
 ---
 
@@ -153,3 +155,17 @@ code: kernels only (no file read, parsing nor orchestration).
 - decode is 12 instr/block
 - `unpack()` use mm128bold text
 - `vcvtps2ph`
+
+
+
+**Kernels agaisat llama.cpp mxfp4 -> f32**
+
+| Size | Cache | Llama.cpp (med; ns/w) | This one (med; ns/w) | Ratio |
+|---|---|---|---|---|
+| 18 KiB | L1 | 0.2654 | 0.1277 | 2.08x |
+| 584 KiB | L2 | 0.2657 | 0.1278 | 2.08x |
+| 18 MiB | L3 | 0.2674 | 0.1287 | 2.08x |
+| 292 MiB | DRAM | 0.2685 | 0.1461 | 1.84x | 
+
+> same protocol as above
+> ./bench/build.sh && bench/out/bench_llama mxfp4 && bench/out/bench_dequant mxfp4

@@ -44,6 +44,7 @@ const std = @import("std");
 pub const Dtype = enum { 
     f4e2m1,
     f8e4m3,
+    f8e8m0,
     f16,
     bf16,
     f32,
@@ -69,6 +70,7 @@ pub const Dtype = enum {
     pub const RECIPE = std.EnumArray(Dtype, Recipe).init(.{ // scalable rulesets
         .f4e2m1 = .{ .header = null, .bits = 4, .exp_bits = 2, .mant_bits = 1, .bias = 1, .kind = .float, .decodable = true, .encodable = false }, //"U8"
         .f8e4m3 = .{ .header = "F8_E4M3", .bits = 8, .exp_bits = 4, .mant_bits = 3, .bias = 7, .kind = .float, .decodable = true, .encodable = false },
+        .f8e8m0 = .{ .header = "U8", .bits = 8, .exp_bits = 8, .mant_bits = 0, .bias = 127, .kind = .exponent, .decodable = true, .encodable = false },
         .f16    = .{ .header = "F16", .bits = 16, .exp_bits = 5, .mant_bits = 10, .bias = 15, .kind = .native, .decodable = true, .encodable = true },
         .bf16   = .{ .header = "BF16", .bits = 16, .exp_bits = 8, .mant_bits = 7, .bias = 127, .kind = .native, .decodable = true, .encodable = true },
         .f32    = .{ .header = "F32", .bits = 32, .exp_bits = 8, .mant_bits = 23, .bias = 127, .kind = .native, .decodable = true, .encodable = true },
@@ -100,6 +102,7 @@ pub const Dtype = enum {
 
 pub const Scheme = enum {
     nvfp4,
+    mxfp4,
 
     pub const Translation = enum {
         affine, // s(q-z)
@@ -110,13 +113,13 @@ pub const Scheme = enum {
         block: u32,
         weight: Dtype,
         scale: Dtype,
+        global_scale: bool,
         translation: Translation,
     };
     
     pub const RECIPE = std.EnumArray(Scheme, Recipe).init(.{
-        .nvfp4 = .{ .weight = .f4e2m1, .scale = .f8e4m3, .block = 16, .translation = .RTN },
-        //.mxfp4 => .{ .weight = .f4e2m1, .scale = .f8e8m0, .block = 32, .translation = .affine }, // later
-
+        .nvfp4 = .{ .weight = .f4e2m1, .scale = .f8e4m3, .block = 16, .global_scale = true, .translation = .RTN },
+        .mxfp4 = .{ .weight = .f4e2m1, .scale = .f8e8m0, .block = 32, .global_scale = false, .translation = .RTN },
     });
 
     pub fn ScaleToScheme(scale: Dtype) ?Scheme {
