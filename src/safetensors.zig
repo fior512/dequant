@@ -41,7 +41,7 @@ const Tensor = struct {
 };
 const Tensors = std.StringArrayHashMapUnmanaged(Tensor);
 
-pub fn parseJson(in: std.Io.File, io: std.Io, arena: std.mem.Allocator) ![]Layer {
+pub inline fn parseJson(in: std.Io.File, io: std.Io, arena: std.mem.Allocator) ![]Layer {
     var buf: [4096]u8 = undefined;
     var reader = in.reader(io, &buf);
 

@@ -26,6 +26,7 @@ const max_out_value_size = blk: {
 };
 const OUT_SIZE = CHUNK_SIZE * max_weights_per_byte * max_out_value_size;
 
+
 fn worker(shared: *Shared) !void {
     var weight_buf: [CHUNK_SIZE]u8 align(CACHE_LINE) = undefined;
     var scales_buf: [SCALES_SIZE]u8 align(CACHE_LINE) = undefined;
@@ -38,7 +39,7 @@ fn worker(shared: *Shared) !void {
     ).bits; // TODO: better name, this is single weight bits size
 
     while (true) {
-        const layer_idx = shared.next.fetchAdd(1, .monotonic); // no sync
+        const layer_idx = shared.next.fetchAdd(1, .monotonic);
         if (layer_idx >= shared.layers.len) return; // done
 
         const layer = shared.layers[layer_idx];
@@ -67,7 +68,7 @@ fn worker(shared: *Shared) !void {
             const out = out_buf[0 .. weight_size * 8 // bytes -> bits
             / weight_bits // how many weights
             * out_bits // output bits
-            / 8 // bits -> bytes
+            / 8 // bytes
             ];
 
             dequant.dequant(scheme, shared.dequant_t, .{
@@ -141,9 +142,8 @@ pub fn main(init: std.process.Init) !void {
         in,
         init.io,
         arena.allocator(),
-    ); // per threads (ratio json/binary bytes is really big)
-    // or
-    // single specialized thread looping (multi .safet K3)
+    );
+    
     //THREADPOOL
     var shared: Shared = .{
         .io = init.io,
@@ -160,22 +160,8 @@ pub fn main(init: std.process.Init) !void {
     for (threads) |thread| thread.join();
 }
 
-test "nvfp4 to f32" {
-    const weights: [8]u8 = @splat(0x7A); // 16 weights
-    const scales: [8]u8 = @splat(0x38); //e4m1 1.0
-    var out: [16 * 4]u8 align(4) = undefined;
-
-    dequant.dequant(
-        .nvfp4,
-        .f32,
-        .{ .weights = &weights, .scales = &scales, .midpoint = &.{}, .global_scale = 2.0 },
-        &out,
-    );
-
-    const values: *const [16]f32 = @ptrCast(&out);
-    try std.testing.expectEqual(@as(f32, -2.0), values[0]);
-    try std.testing.expectEqual(@as(f32, 12.0), values[1]);
-}
+// -------------------------------------------------------------------------------------
+// TESTS
 
 // DEQUANT
 test "dequant: nvfp4" {
