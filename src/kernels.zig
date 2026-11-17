@@ -62,7 +62,13 @@ pub inline fn decode(comptime format: types.Dtype.Recipe, comptime count: usize,
             const magnitude: Lanes = @bitCast(significand * power);
             return @bitCast(sign | magnitude);
         },
-        .exponent => @compileError("decode: weight dtype"),
+        .exponent => {
+            const zero: Lanes = @splat(0);
+
+            const lo = @select(u32, wide == zero, @as(Lanes, @splat(0x00400000)), wide << @splat(23));
+            const bits = @select(u32, wide == @as(Lanes, @splat(0xFF)), @as(Lanes, @splat(0x7FC00000)), lo);
+            return @bitCast(bits);
+        },
         .native => @compileError("decode: weight dtype"),
         .integer => return @floatFromInt(wide),
     }

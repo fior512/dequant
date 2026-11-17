@@ -3,8 +3,8 @@ const types = @import("types.zig");
 const safetensors = @import("safetensors.zig");
 const dequant = @import("dequant.zig");
 
-const CACHE_LINE = std.atomic.cache_line; // 128 x86
-const CHUNK_SIZE = 0x40000; // 256KiB, packed weights per chunk
+const CACHE_LINE = std.atomic.cache_line;
+const CHUNK_SIZE = 0x40000; // 256KiB, max layer slice
 const SCALES_SIZE = CHUNK_SIZE / 8; // smallest scale block: nvfp4 16 elements -> 8 B -> 1 scale
 
 const max_weights_per_byte = blk: {
@@ -160,9 +160,9 @@ pub fn main(init: std.process.Init) !void {
     for (threads) |thread| thread.join();
 }
 
-test "nvfp4 to f32" { // Vibecoded
-    const weights = [_]u8{0x7A} ** 8; // 16 weights
-    const scales = [_]u8{0x38}; //e4m1 1.0
+test "nvfp4 to f32" {
+    const weights: [8]u8 = @splat(0x7A); // 16 weights
+    const scales: [8]u8 = @splat(0x38); //e4m1 1.0
     var out: [16 * 4]u8 align(4) = undefined;
 
     dequant.dequant(
@@ -178,9 +178,10 @@ test "nvfp4 to f32" { // Vibecoded
 }
 
 // DEQUANT
-test "dequant: nvfp4 to f32, f16, bf16" {
-    // 2 blocks, each holds every nibble once (low nibble first): 0x0, 0x1, .. 0xF
-    const weights = [_]u8{ 0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE } ** 2;
+test "dequant: nvfp4" {
+    const weights: [16]u8 = @bitCast(
+        @as([2][8]u8, @splat(.{ 0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE })),
+    );
     const scales = [_]u8{ 0x38, 0x30 }; // e4m3: 1.0, 0.5
     const in: dequant.Input = .{
         .weights = &weights,
@@ -203,7 +204,10 @@ test "dequant: nvfp4 to f32, f16, bf16" {
 
     var out_f16: [32]f16 = undefined;
     dequant.dequant(.nvfp4, .f16, in, @ptrCast(&out_f16));
-    for (want, out_f16) |w, got| try std.testing.expectEqual(@as(f16, @floatCast(w)), got);
+    for (want, out_f16) |w, got| try std.testing.expectEqual(
+        @as(u16, @bitCast(@as(f16, @floatCast(w)))),
+        @as(u16, @bitCast(got)),
+    );
 
     var out_bf16: [32]u16 = undefined;
     dequant.dequant(.nvfp4, .bf16, in, @ptrCast(&out_bf16));
@@ -211,6 +215,44 @@ test "dequant: nvfp4 to f32, f16, bf16" {
         @as(u16, @truncate(@as(u32, @bitCast(w)) >> 16)),
         got,
     ); // exact values: bf16 == high u16
+}
+
+test "dequant: mxfp4" {
+    const weights: [32]u8 = @bitCast(
+        @as([4][8]u8, @splat(.{ 0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE })),
+    );
+    const scales = [_]u8{ 0x80, 0x7F }; // e8m0: 2^1, 2^0
+    const in: dequant.Input = .{
+        .weights = &weights,
+        .scales = &scales,
+        .midpoint = &.{},
+        .global_scale = 1.0,
+    };
+
+    const x2 = [16]f32{ 0, 1, 2, 3, 4, 6, 8, 12, -0.0, -1, -2, -3, -4, -6, -8, -12 };
+    const x1 = [16]f32{ 0, 0.5, 1, 1.5, 2, 3, 4, 6, -0.0, -0.5, -1, -1.5, -2, -3, -4, -6 };
+    const want = x2 ++ x2 ++ x1 ++ x1;
+
+    var out_f32: [64]f32 = undefined;
+    dequant.dequant(.mxfp4, .f32, in, @ptrCast(&out_f32));
+    for (want, out_f32) |w, got| try std.testing.expectEqual(
+        @as(u32, @bitCast(w)),
+        @as(u32, @bitCast(got)),
+    );
+
+    var out_f16: [64]f16 = undefined;
+    dequant.dequant(.mxfp4, .f16, in, @ptrCast(&out_f16));
+    for (want, out_f16) |w, got| try std.testing.expectEqual(
+        @as(u16, @bitCast(@as(f16, @floatCast(w)))),
+        @as(u16, @bitCast(got)),
+    );
+
+    var out_bf16: [64]u16 = undefined;
+    dequant.dequant(.mxfp4, .bf16, in, @ptrCast(&out_bf16));
+    for (want, out_bf16) |w, got| try std.testing.expectEqual(
+        @as(u16, @truncate(@as(u32, @bitCast(w)) >> 16)),
+        got,
+    );
 }
 
 // PARSE JSON
@@ -223,10 +265,10 @@ test "safetensors: parseJson" {
         \\"fc.weight_scale_2":{"dtype":"F32","shape":[],"data_offsets":[18,22]},
         \\"fc.bias":{"dtype":"F32","shape":[2],"data_offsets":[22,30]}}
     ;
-    const data = [_]u8{0x7A} ** 16 // fc.weight
-    ++ [_]u8{ 0x38, 0x30 } // fc.weight_scale
-    ++ [_]u8{ 0x00, 0x00, 0x00, 0x40 } // fc.weight_scale_2 = 2.0
-    ++ [_]u8{0} ** 8; // fc.bias
+    const data = @as([16]u8, @splat(0x7A)) // fc.weight
+        ++ [_]u8{ 0x38, 0x30 } // fc.weight_scale
+        ++ [_]u8{ 0x00, 0x00, 0x00, 0x40 } // fc.weight_scale_2 = 2.0
+        ++ @as([8]u8, @splat(0)); // fc.bias
     const size: [8]u8 = @bitCast(std.mem.nativeToLittle(u64, json.len));
 
     var tmp = std.testing.tmpDir(.{});

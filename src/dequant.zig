@@ -50,7 +50,7 @@ fn block(comptime scheme: types.Scheme.Recipe, comptime output_t: types.Dtype, i
 
         // ENCODE (f32 -> out_t)
         const encoded = kernels.encode(output_t, scheme.block, weights);
-        out[idx * out_block_size..][0..out_block_size].* = @bitCast(encoded);
+        out[idx * out_block_size..][0..out_block_size].* = std.mem.toBytes(encoded);
     }
 }
 
@@ -65,7 +65,7 @@ fn loadScale(comptime input_t: types.Dtype, scales: []const u8, block_idx: usize
     //
     const format = comptime types.Dtype.RECIPE.get(input_t);
     switch (format.kind) {
-        .float => {
+        .float, .exponent => {
             const lookup: [1 << format.bits]f32 = comptime blk: { // int(incr) -> float __M_ special format
                 @setEvalBranchQuota(1_000_000);
                 const Count: usize = 1 << format.bits; // possible permutation
