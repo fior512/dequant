@@ -153,7 +153,7 @@ code: kernels only (no file read, parsing nor orchestration).
 - `_copy_to_iter`(memcpy) inside `std.Io.Reader.interface.take`
 - mostly backend-bound
 - decode is 12 instr/block
-- `unpack()` use mm128bold text
+- `unpack()` use mm128
 - `vcvtps2ph`
 
 
