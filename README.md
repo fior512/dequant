@@ -91,16 +91,11 @@ xychart-beta
     title "gpt-oss-20b f32, speedup vs 1 thread"
     x-axis "threads" ["1", "2", "3", "4", "6", "8", "12"]
     y-axis "speedup" 0 --> 6.5
-    line [1, 2, 3, 4, 6, 6, 6]
     line [1, 1.99, 2.94, 3.41, 5.84, 5.27, 5.66]
-    line [1, 1.97, 2.83, 3.35, 5.31, 5.74, 5.78]
     line [1, 1.90, 2.68, 3.30, 4.71, 4.95, 5.17]
 ```
 
-Lines, top to bottom at 6 threads:
-- gray: ideal, capped at 6 physical cores
-- aqua: compute only, no file reads
-- orange: layers sorted by size, largest first
+- aqua: compute only, in memory
 - blue: current code
 
 
