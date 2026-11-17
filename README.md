@@ -125,16 +125,6 @@ Output f32, 1 thread, kernels only (no file read, parse or orchestration). Media
 
 > llama.cpp kernels from `tests/test-quantize-perf.cpp`, master `ded522f8304554317e7ff8f88698dbbbca5425aa` (2026-11-13). Pinned, 3 trials x 20 s, TSC-timed.
 
-### Profiling
-
-```sh
-perf stat -e task-clock,cycles:u,cycles:k,instructions:u ./zig-out/bin/dequant "$f" f32 6
-perf record -g ./zig-out/bin/dequant "$f" f32 1 && perf report --no-children
-objdump -d --no-show-raw-insn --disassemble='bench_dequant.DequantKernel(.nvfp4).Run' bench/out/bench_dequant
-llvm-mca -mcpu=znver4 loop.s
-echo 0 | sudo tee /sys/devices/system/cpu/cpufreq/boost   # boost off
-```
-
 ## TODO
 
 - Work item = chunk, not layer
