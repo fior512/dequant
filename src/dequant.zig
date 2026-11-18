@@ -9,7 +9,7 @@ pub const Input = struct {
     global_scale: f32,
 };
 
-pub fn dequant(scheme: types.Scheme, output_t: types.Dtype, in: Input, out: []u8) void { 
+pub fn dequant(scheme: types.Scheme, output_t: types.Dtype, in: Input, out: []u8) void {
     if (!types.Dtype.RECIPE.get(output_t).encodable) @panic("Args: dtype not encodable");
     switch (scheme) { // compiler hint to avoid branchs cascade
         inline else => |c_scheme| switch (output_t) { // c: comptime
@@ -56,26 +56,14 @@ fn block(comptime scheme: types.Scheme.Recipe, comptime output_t: types.Dtype, i
 
 
 fn loadScale(comptime input_t: types.Dtype, scales: []const u8, block_idx: usize) f32 {
-    // this precompute the scales at comptime,
-    // scales are given as E4M3 for NVFP4
-    // so during runtime we can fetch scale in .safetensor and lookup its translation as f32
-    //
-    // lookup is more efficient than it looks, this is a "dequant" so types are already small -> not much permutations
-    //
     const format = comptime types.Dtype.RECIPE.get(input_t);
     switch (format.kind) {
         .float, .exponent => return (comptime kernels.tableTranslate(format))[scales[block_idx]],
-        .native => { //skip lookup, `decode()` unnecessary
-            const bin = std.meta.Int(.unsigned, format.bits);
+        .native, .integer => {
+            const Int = @Int(.unsigned, format.bits);
             const size = format.bits / 8; // bytes
-            const raw = std.mem.readInt(bin, scales[block_idx * size..][0..size], .little);
-            return switch (input_t) {
-                .f32 => @bitCast(raw),
-                .f16 => @floatCast(@as(f16, @bitCast(raw))),
-                .bf16 => @bitCast(@as(u32, raw) << 16),
-                else => @compileError("loadScale: native input_t"),
-            };
+            const raw = std.mem.readInt(Int, scales[block_idx * size..][0..size], .little);
+            return kernels.decode(format, 1, @as(@Vector(1, Int), @splat(raw)))[0];
         },
-        else => @compileError("loadScale: input_t scale"),
     }
 }
