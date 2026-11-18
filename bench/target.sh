@@ -4,6 +4,7 @@ cd "$(dirname "$0")/.."
 
 targets="x86_64 x86_64_v2 x86_64_v3 x86_64_v4 native"
 types="f32 f16 bf16"
+shards="models/gpt-oss-20b/model-*.safetensors"
 out_dir="bench/out"
 mkdir -p "$out_dir"
 time_file="$out_dir/target_time_$$"
@@ -28,19 +29,15 @@ target_name() {
 measure_gpt_ms() {
   target=$1
   type=$2
-  total_ms=0
-  for f in models/gpt-oss-20b/model-*.safetensors; do
-    min_s=999999
-    i=0
-    while [ "$i" -lt 3 ]; do
-      /usr/bin/time -f '%e' -o "$time_file" taskset -c 2 "out/$target/bin/dequant" "$f" "$type" 1 >/dev/null 2>&1
-      t=$(cat "$time_file")
-      min_s=$(awk -v a="$min_s" -v b="$t" 'BEGIN{print (b<a)?b:a}')
-      i=$((i+1))
-    done
-    total_ms=$(awk -v a="$total_ms" -v b="$min_s" 'BEGIN{printf "%.0f", a+b*1000}')
+  min_s=999999
+  i=0
+  while [ "$i" -lt 3 ]; do
+    /usr/bin/time -f '%e %M' -o "$time_file" taskset -c 2 "out/$target/bin/dequant" $shards "$type" 1 >/dev/null 2>&1
+    t=$(awk '{print $1}' "$time_file")
+    min_s=$(awk -v a="$min_s" -v b="$t" 'BEGIN{print (b<a)?b:a}')
+    i=$((i+1))
   done
-  echo "$total_ms"
+  awk -v s="$min_s" 'BEGIN{printf "%.0f", s*1000}'
 }
 
 echo "| target | ISA | gpt f32 | gpt f16 | gpt bf16 | kernel nvfp4 ns/w |"

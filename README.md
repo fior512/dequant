@@ -5,15 +5,15 @@ gpt-oss-20b (`openai/gpt-oss-20b`, 12.8 GiB, MXFP4 experts) on Ryzen 5 7600X:
 
 | out_t | 1t | 6t | 12t | GB/s in (6t) | GB/s out (6t) | qw/s (6t) |
 |---|---|---|---|---|---|---|
-| f32 | 1330 ms | 330 ms | 330 ms | 41.7 | 231.6 | 57.9 G |
-| f16 | 1680 ms | 370 ms | 310 ms | 37.2 | 103.3 | 51.6 G |
-| bf16 | 2330 ms | 490 ms | 430 ms | 28.1 | 78.0 | 39.0 G |
+| f32 | 1490 ms | 360 ms | 350 ms | 38.2 | 212.3 | 53.1 G |
+| f16 | 1800 ms | 410 ms | 340 ms | 33.6 | 93.2 | 46.6 G |
+| bf16 | 2380 ms | 520 ms | 450 ms | 26.5 | 73.5 | 36.8 G |
 
 ## Usage
 
 ```sh
 zig build -Doptimize=ReleaseFast -Dcpu=native
-./zig-out/bin/dequant {safetensors_path} {f32|f16|bf16} {threads}
+./zig-out/bin/dequant ./models/gpt-oss-20b/model*.safetensors f32 8
 ```
 
 Recognized tensor layouts (`src/safetensors.zig`, `HEADERS`):
@@ -63,7 +63,7 @@ Setup: Ryzen 5 7600X (Zen 4, 6C/12T), DDR5, Linux 6.18, boost on, EPP balance_pe
 
 ```sh
 hf download openai/gpt-oss-20b --include "model-*.safetensors" --local-dir models/gpt-oss-20b
-./bench/gpt-oss.sh
+./bench/wallmodel.sh models/gpt-oss-20b/model-*.safetensors
 ```
 
 ### Per target
@@ -88,8 +88,8 @@ xychart-beta
     title "gpt-oss-20b f32, throughput vs threads"
     x-axis "threads" ["1", "2", "3", "4", "6", "8", "12"]
     y-axis "GB/s" 0 --> 260
-    line [10.3, 19.7, 27.5, 34.4, 41.7, 45.9, 40.5]
-    line [57.5, 109.2, 152.9, 191.1, 231.6, 254.8, 224.8]
+    line [9.2, 17.2, 24.1, 31.3, 38.2, 43.0, 40.5]
+    line [51.0, 95.6, 134.1, 173.7, 212.3, 238.9, 224.8]
 ```
 - green: GB/s in
 - aqua: GB/s out
