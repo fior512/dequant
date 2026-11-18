@@ -91,8 +91,8 @@ xychart-beta
     line [9.2, 17.2, 24.1, 31.3, 38.2, 43.0, 40.5]
     line [51.0, 95.6, 134.1, 173.7, 212.3, 238.9, 224.8]
 ```
-- green: GB/s in
-- aqua: GB/s out
+- blue: GB/s in
+- orange: GB/s out
 
 
 **Scaling:**
