@@ -40,7 +40,8 @@ fn DequantKernel(comptime scheme: generic.Scheme) type {
 }
 
 pub fn main(init: std.process.Init) !void {
-    switch (harness.ParseScheme(init.minimal.args.iterate())) {
-        inline else => |scheme| try harness.Main(DequantKernel(scheme), "dequant  "),
+    const args = harness.ParseArgs(init.minimal.args.iterate());
+    switch (args.scheme) {
+        inline else => |scheme| try harness.Main(DequantKernel(scheme), "dequant  ", args.size_filter),
     }
 }

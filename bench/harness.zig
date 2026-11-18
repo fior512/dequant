@@ -19,14 +19,20 @@ const TrialResult = struct {
     wall_ns: u64,
 };
 
-pub fn ParseScheme(args: std.process.Args.Iterator) generic.Scheme {
+pub const Args = struct {
+    scheme: generic.Scheme,
+    size_filter: ?[]const u8,
+};
+
+pub fn ParseArgs(args: std.process.Args.Iterator) Args {
     var iterator = args;
     _ = iterator.skip();
     const scheme_name = iterator.next() orelse @panic("Args: missing scheme (nvfp4|mxfp4)");
-    return std.meta.stringToEnum(generic.Scheme, scheme_name) orelse @panic("Args: unknown scheme");
+    const scheme = std.meta.stringToEnum(generic.Scheme, scheme_name) orelse @panic("Args: unknown scheme");
+    return .{ .scheme = scheme, .size_filter = iterator.next() };
 }
 
-pub fn Main(comptime Kernel: type, comptime name: []const u8) !void {
+pub fn Main(comptime Kernel: type, comptime name: []const u8, size_filter: ?[]const u8) !void {
     const recipe = comptime generic.Scheme.RECIPE.get(Kernel.SCHEME);
     PinCpu(generic.PIN_CPU);
     const tsc_hz = CalibrateTscHz();
@@ -42,6 +48,7 @@ pub fn Main(comptime Kernel: type, comptime name: []const u8) !void {
 
     var trial_index_global: u32 = 0;
     for (generic.SIZES) |size| {
+        if (size_filter) |filter| if (!std.mem.eql(u8, std.mem.trim(u8, size.label, " "), std.mem.trim(u8, filter, " "))) continue;
         var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
         defer arena.deinit();
         const allocator = arena.allocator();

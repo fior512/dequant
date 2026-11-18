@@ -5,9 +5,9 @@ gpt-oss-20b (`openai/gpt-oss-20b`, 12.8 GiB, MXFP4 experts) on Ryzen 5 7600X:
 
 | out_t | 1t | 6t | 12t | GB/s in (6t) | GB/s out (6t) | qw/s (6t) |
 |---|---|---|---|---|---|---|
-| f32 | 2834 ms | 620 ms | 572 ms | 22.2 | 123.3 | 30.8 G |
-| f16 | 3442 ms | 701 ms | 640 ms | 19.6 | 54.6 | 27.3 G |
-| bf16 | 4113 ms | 857 ms | 763 ms | 16.1 | 44.6 | 22.3 G |
+| f32 | 1330 ms | 330 ms | 330 ms | 41.7 | 231.6 | 57.9 G |
+| f16 | 1680 ms | 370 ms | 310 ms | 37.2 | 103.3 | 51.6 G |
+| bf16 | 2330 ms | 490 ms | 430 ms | 28.1 | 78.0 | 39.0 G |
 
 ## Usage
 
@@ -63,39 +63,36 @@ Setup: Ryzen 5 7600X (Zen 4, 6C/12T), DDR5, Linux 6.18, boost on, EPP balance_pe
 
 ```sh
 hf download openai/gpt-oss-20b --include "model-*.safetensors" --local-dir models/gpt-oss-20b
-for f in models/gpt-oss-20b/model-*.safetensors; do ./zig-out/bin/dequant "$f" f32 6; done
+./bench/gpt-oss.sh
 ```
 
 ### Per target
 
 ```sh
-for c in x86_64 x86_64_v2 x86_64_v3 x86_64_v4 native; do
-  zig build -Doptimize=ReleaseFast -Dcpu=$c --prefix out/$c
-  for f in models/gpt-oss-20b/model-*.safetensors; do taskset -c 2 out/$c/bin/dequant "$f" f32 1; done
-done
+./bench/target.sh
 ```
 
 | target | ISA | gpt f32 | gpt f16 | gpt bf16 | kernel nvfp4 ns/w | cyc/block (mca) |
 |---|---|---|---|---|---|---|
-| x86_64_v1 | SSE2 | 5421 ms | 88353 ms | 7045 ms | 0.289 | 24.1 |
-| x86_64_v2 | SSE4.2 | 5449 ms | 88849 ms | 7025 ms | 0.295 | 25.6 |
-| x86_64_v3 | AVX2+F16C | 3234 ms | 3579 ms | 3998 ms | 0.152 | 12.0 |
-| x86_64_v4 | AVX-512 | 3017 ms | 3278 ms | 3975 ms | 0.143 | 8.4 |
-| native | znver4+GFNI | 2834 ms | 3442 ms | 4113 ms | 0.124 | 8.1 |
+| x86_64_v1 | SSE2 | 5430 ms | 88330 ms | 7040 ms | 0.2827 | 25.0 |
+| x86_64_v2 | SSE4.2 | 5450 ms | 88270 ms | 7040 ms | 0.2909 | 25.0 |
+| x86_64_v3 | AVX2+F16C | 2010 ms | 2580 ms | 3340 ms | 0.0785 | 15.0 |
+| x86_64_v4 | AVX-512 | 1710 ms | 1930 ms | 2720 ms | 0.0663 | 5.0 |
+| native | znver4+GFNI | 1320 ms | 1640 ms | 2330 ms | 0.0439 | 3.0 |
 
 ### Thread scaling
 
 ```mermaid
-%%{init: {"themeVariables": {"xyChart": {"plotColorPalette": "#1baf7a, #2a78d6"}}}}%%
+%%{init: {"themeVariables": {"xyChart": {"plotColorPalette": "#2a78d6, #FF9900"}}}}%%
 xychart-beta
-    title "gpt-oss-20b f32, speedup vs 1 thread"
+    title "gpt-oss-20b f32, throughput vs threads"
     x-axis "threads" ["1", "2", "3", "4", "6", "8", "12"]
-    y-axis "speedup" 0 --> 6.5
-    line [1, 1.90, 2.68, 3.30, 4.71, 4.95, 5.17]
-    line [1, 1.99, 2.94, 3.41, 5.84, 5.27, 5.66]
+    y-axis "GB/s" 0 --> 260
+    line [10.3, 19.7, 27.5, 34.4, 41.7, 45.9, 40.5]
+    line [57.5, 109.2, 152.9, 191.1, 231.6, 254.8, 224.8]
 ```
-- green: current code
-- aqua: compute only, in memory
+- green: GB/s in
+- aqua: GB/s out
 
 
 **Scaling:**
@@ -112,10 +109,10 @@ Output f32, 1 thread, kernels only (no file read, parse or orchestration). Media
 
 | size | cache | llama.cpp nvfp4 | HEAD nvfp4 | ratio | llama.cpp mxfp4 | HEAD mxfp4 | ratio |
 |---|---|---|---|---|---|---|---|
-| 18 KiB | L1 | 0.4604 | 0.1288 | 3.57x | 0.2654 | 0.1277 | 2.08x |
-| 584 KiB | L2 | 0.4635 | 0.1294 | 3.58x | 0.2657 | 0.1278 | 2.08x |
-| 18 MiB | L3 | 0.4759 | 0.1302 | 3.66x | 0.2674 | 0.1287 | 2.08x |
-| 292 MiB | DRAM | 0.4764 | 0.1567 | 3.04x | 0.2685 | 0.1461 | 1.84x |
+| 18 KiB | L1 | 0.4604 | 0.0436 | 10.56x | 0.2654 | 0.0439 | 6.05x |
+| 584 KiB | L2 | 0.4635 | 0.0448 | 10.35x | 0.2657 | 0.0446 | 5.96x |
+| 18 MiB | L3 | 0.4759 | 0.0455 | 10.46x | 0.2674 | 0.0459 | 5.83x |
+| 292 MiB | DRAM | 0.4764 | 0.1431 | 3.33x | 0.2685 | 0.1419 | 1.89x |
 
 ```sh
 ./bench/build.sh
