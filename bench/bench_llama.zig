@@ -61,8 +61,9 @@ const LlamaMxfp4Kernel = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
-    switch (harness.ParseScheme(init.minimal.args.iterate())) {
-        .nvfp4 => try harness.Main(LlamaNvfp4Kernel, "llama.cpp"),
-        .mxfp4 => try harness.Main(LlamaMxfp4Kernel, "llama.cpp"),
+    const args = harness.ParseArgs(init.minimal.args.iterate());
+    switch (args.scheme) {
+        .nvfp4 => try harness.Main(LlamaNvfp4Kernel, "llama.cpp", args.size_filter),
+        .mxfp4 => try harness.Main(LlamaMxfp4Kernel, "llama.cpp", args.size_filter),
     }
 }

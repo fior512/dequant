@@ -33,6 +33,26 @@ pub inline fn decode(comptime format: types.Dtype.Recipe, comptime count: usize,
     const Floats = @Vector(count, f32);
     const wide: Lanes = elements; // 8bits -> 32
     
+
+    const t_size = 1 << format.bits;
+    const reg_units = comptime @min(t_size, std.simd.suggestVectorLength(u32) orelse 1);
+    if (comptime t_size <= 2 * reg_units) if (!@inComptime()) { // Q:fit in 2 registers? (hi,lo)
+        const TABLE: [t_size]f32 = comptime tableTranslate(format);
+        
+        const idx = wide & @as(Lanes, @splat(reg_units - 1));
+
+        const LO: @Vector(reg_units, f32) = TABLE[0..reg_units].*;
+        const HI: @Vector(reg_units, f32) = TABLE[t_size - reg_units..].*;
+
+        var lo: Floats = undefined;
+        var hi: Floats = undefined;
+        inline for (0..count) |lane_idx| {
+            lo[lane_idx] = LO[idx[lane_idx]];
+            hi[lane_idx] = HI[idx[lane_idx]];
+        }
+        return @select(f32, wide >= @as(Lanes, @splat(reg_units)), hi, lo);
+    };
+
     switch (format.kind) {
         .float => {
             // element: [sign | exp | mant]
@@ -40,7 +60,7 @@ pub inline fn decode(comptime format: types.Dtype.Recipe, comptime count: usize,
             //          significand = 1.mant (1 is not in bits)
             //
             //  f32: S1E8M23
-            
+
             const zero: Lanes = @splat(0);
             
             // Extract
@@ -95,4 +115,14 @@ pub inline fn encode(comptime dtype: types.Dtype, comptime count: usize, values:
         },
         else => @compileError("encode: not encodable"),
     }
+}
+
+
+pub fn tableTranslate(comptime format: types.Dtype.Recipe) [1 << format.bits]f32 {
+    //Produce a lookup table that will be used by both loadScale() and decode()
+    @setEvalBranchQuota(1_000_000);
+    const t_size = 1 << format.bits;
+    var elements: [t_size]u8 = undefined;
+    for (&elements, 0..) |*element , idx| element.* = @intCast(idx);
+    return comptime decode(format, t_size, elements);
 }
