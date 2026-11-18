@@ -26,7 +26,6 @@ const max_out_value_size = blk: {
 };
 const OUT_SIZE = CHUNK_SIZE * max_weights_per_byte * max_out_value_size;
 
-
 fn worker(shared: *Shared) !void {
     var weight_buf: [CHUNK_SIZE]u8 align(CACHE_LINE) = undefined;
     var scales_buf: [SCALES_SIZE]u8 align(CACHE_LINE) = undefined;
@@ -35,7 +34,7 @@ fn worker(shared: *Shared) !void {
     var weight_reader = shared.in.reader(shared.io, &weight_buf);
     var scales_reader = shared.in.reader(shared.io, &scales_buf);
     const out_bits: usize = types.Dtype.RECIPE.get(
-        shared.dequant_t,
+        shared.out_t,
     ).bits; // TODO: better name, this is single weight bits size
 
     while (true) {
@@ -71,7 +70,7 @@ fn worker(shared: *Shared) !void {
             / 8 // bytes
             ];
 
-            dequant.dequant(scheme, shared.dequant_t, .{
+            dequant.dequant(scheme, shared.out_t, .{
                 .weights = weights,
                 .scales = scales,
                 .midpoint = &.{},
@@ -84,37 +83,41 @@ fn worker(shared: *Shared) !void {
 }
 
 const Args = struct {
-    path: []const u8,
-    dequant_t: types.Dtype,
+    path: []const []const u8,
+    out_t: types.Dtype,
     threads: usize,
 };
 
-inline fn flags(args: std.process.Args.Iterator) !Args {
+inline fn flags(gpa: std.mem.Allocator, args: std.process.Args.Iterator) !Args {
     var it = args;
     _ = it.skip();
 
+    var rest: std.ArrayList([]const u8) = .empty;
+    defer rest.deinit(gpa);
+
+    while (it.next()) |arg| try rest.append(gpa, arg);
+    if (rest.items.len < 3) @panic(
+        "Args: missing argument (binary {.safetensors} {out_t} {threads})",
+    ); // missing
+
     //.SAFETENSORS
-    const path = if (it.next()) |path| path else @panic("Args: missing .safetensors path");
+    const path = try gpa.dupe([]const u8, rest.items[0 .. rest.items.len - 2]);
 
     //DEQUANT TYPE
-    const stype = it.next() orelse @panic("Args: Missing dequantization type");
-    const dequant_type = std.meta.stringToEnum(
-        types.Dtype,
-        stype,
-    ) orelse @panic("Args: Unknown dequant type");
+    const out_t =
+        std.meta.stringToEnum(types.Dtype, rest.items[rest.items.len - 2]) orelse
+            @panic("Args: Unknown output type");
 
     //THREADPOOL
-    const max_threads = std.Thread.getCpuCount() catch 1;
-    const threads = if (it.next()) |str|
-        std.fmt.parseInt(usize, str, 10) catch @panic("Args: Invalid thread count")
-    else
-        max_threads;
+    const threads =
+        std.fmt.parseInt(usize, rest.items[rest.items.len - 1], 10) catch
+            @panic("Args: Invalid thread count");
 
-    if (threads == 0 or threads > max_threads) @panic("Args: Invalid thread count");
+    if (threads == 0 or threads > 12) @panic("Args: Invalid thread count");
 
     return Args{
         .path = path,
-        .dequant_t = dequant_type,
+        .out_t = out_t,
         .threads = threads,
     };
 }
@@ -124,7 +127,7 @@ const Shared = struct {
     io: std.Io,
     layers: []const safetensors.Layer,
     in: std.Io.File,
-    dequant_t: types.Dtype,
+    out_t: types.Dtype,
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -132,33 +135,34 @@ pub fn main(init: std.process.Init) !void {
     var arena = std.heap.ArenaAllocator.init(smp);
     defer arena.deinit();
 
-    const args = try flags(init.minimal.args.iterate());
-
-    //FILE
-    const in = try std.Io.Dir.cwd().openFile(init.io, args.path, .{});
-    defer in.close(init.io);
-
-    //HEADER MAPING
-    const layers = try safetensors.parseJson(
-        in,
-        init.io,
-        arena.allocator(),
-    );
-    
-    //THREADPOOL
-    var shared: Shared = .{
-        .io = init.io,
-        .layers = layers,
-        .in = in,
-        .dequant_t = args.dequant_t,
-    };
-
+    // ARGS
+    const args = try flags(init.gpa, init.minimal.args.iterate());
     const threads: []std.Thread = try init.gpa.alloc(std.Thread, args.threads);
+    defer init.gpa.free(args.path);
     defer init.gpa.free(threads);
-    for (threads) |*thread| {
-        thread.* = try std.Thread.spawn(.{}, worker, .{&shared});
+
+    for (args.path) |file| {
+        //FILE
+        const in = try std.Io.Dir.cwd().openFile(init.io, file, .{});
+        defer in.close(init.io);
+
+        //HEADER MAPING
+        const layers = try safetensors.parseJson(
+            in,
+            init.io,
+            arena.allocator(),
+        );
+
+        //THREADPOOL
+        var shared: Shared = .{
+            .io = init.io,
+            .layers = layers,
+            .in = in,
+            .out_t = args.out_t,
+        };
+        for (threads) |*thread| thread.* = try std.Thread.spawn(.{}, worker, .{&shared});
+        for (threads) |thread| thread.join();
     }
-    for (threads) |thread| thread.join();
 }
 
 // -------------------------------------------------------------------------------------
