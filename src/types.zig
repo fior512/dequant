@@ -67,7 +67,7 @@ pub const Dtype = enum {
         decodable: bool,
     };
 
-    pub const RECIPE = std.EnumArray(Dtype, Recipe).init(.{ // scalable rulesets
+    pub const RECIPE = std.EnumArray(Dtype, Recipe).init(.{
         .f4e2m1 = .{ .header = null, .bits = 4, .exp_bits = 2, .mant_bits = 1, .bias = 1, .kind = .float, .decodable = true, .encodable = false }, //"U8"
         .f8e4m3 = .{ .header = "F8_E4M3", .bits = 8, .exp_bits = 4, .mant_bits = 3, .bias = 7, .kind = .float, .decodable = true, .encodable = false },
         .f8e8m0 = .{ .header = "U8", .bits = 8, .exp_bits = 8, .mant_bits = 0, .bias = 127, .kind = .exponent, .decodable = true, .encodable = false },
@@ -84,19 +84,15 @@ pub const Dtype = enum {
         return null;
     }
 
-
-    pub fn Storage(comptime output_t: Dtype) type { // encode complexity bottleneck
+    pub fn Storage(comptime output_t: Dtype) type {
         return switch (output_t) {
             .f16 => f16,
             .f32 => f32,
             .bf16 => u16,
             else => @compileError("Storage: not encodable"),
-        };
+        }; //TODO: do smth
     }
-
-
 };
-
 
 
 

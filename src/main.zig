@@ -130,6 +130,7 @@ const Shared = struct {
 pub fn main(init: std.process.Init) !void {
     const smp = std.heap.smp_allocator;
     var arena = std.heap.ArenaAllocator.init(smp);
+    defer arena.deinit();
 
     const args = try flags(init.minimal.args.iterate());
 

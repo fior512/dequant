@@ -23,12 +23,18 @@ pub inline fn unpack(comptime format: types.Dtype.Recipe, comptime count: usize,
                                                                      // lo first bcs little endian
         },
         8 => return bytes.*,
-        else => @compileError("unpack: weight bits"),
+        else => {
+            const Int = @Int(.unsigned, format.bits);
+            const size = format.bits / 8;
+            var out: @Vector(count, Int) = undefined;
+            inline for (0..count) |idx| out[idx] = std.mem.readInt(Int, bytes[idx*size..][0..size], .little);
+            return out;
+        },
     }
 }
 
 // decode for E_M_ types
-pub inline fn decode(comptime format: types.Dtype.Recipe, comptime count: usize, elements: @Vector(count, u8)) @Vector(count, f32) {
+pub inline fn decode(comptime format: types.Dtype.Recipe, comptime count: usize, elements: anytype) @Vector(count, f32) {
     const Lanes = @Vector(count, u32);
     const Floats = @Vector(count, f32);
     const wide: Lanes = elements; // 8bits -> 32
