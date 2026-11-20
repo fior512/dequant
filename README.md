@@ -127,11 +127,11 @@ Caveat: `out_buf` is reused, so output never reaches DRAM. A real f32 consumer w
 Output f32, 1 thread, kernels only (no file read, parse or orchestration). Median ns/weight.
 
 | size | cache | llama.cpp nvfp4 | HEAD nvfp4 | ratio | llama.cpp mxfp4 | HEAD mxfp4 | ratio |
-|---|---|---|---|---|---|---|---|
-| 18 KiB | L1 | 0.4604 | 0.0436 | 10.56x | 0.2654 | 0.0439 | 6.05x |
-| 584 KiB | L2 | 0.4635 | 0.0448 | 10.35x | 0.2657 | 0.0446 | 5.96x |
-| 18 MiB | L3 | 0.4759 | 0.0455 | 10.46x | 0.2674 | 0.0459 | 5.83x |
-| 292 MiB | DRAM | 0.4764 | 0.1431 | 3.33x | 0.2685 | 0.1419 | 1.89x |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 18 KiB | L1 | 0.2899 | 0.0436 | 6.65x | 0.2656 | 0.0439 | 6.05x |
+| 584 KiB | L2 | 0.2924 | 0.0445 | 6.57x | 0.2660 | 0.0446 | 5.96x |
+| 18 MiB | L3 | 0.3159 | 0.0455 | 6.94x | 0.2673 | 0.0459 | 5.82x |
+| 292 MiB | DRAM | 0.3171 | 0.1427 | 2.22x | 0.2680 | 0.1419 | 1.89x |
 
 ```sh
 ./bench/build.sh
