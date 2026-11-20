@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("types.zig");
 const safetensors = @import("safetensors.zig");
 const dequant = @import("dequant.zig");
+const kernels = @import("kernels.zig");
 
 const CACHE_LINE = std.atomic.cache_line;
 const CHUNK_SIZE = 0x40000; // 256KiB, max layer slice
@@ -20,7 +21,7 @@ const max_out_value_size = blk: {
     var max_size: usize = 0;
     for (std.enums.values(types.Dtype)) |dtype| {
         const recipe = types.Dtype.RECIPE.get(dtype);
-        if (recipe.encodable) max_size = @max(max_size, recipe.bits / 8);
+        max_size = @max(max_size, recipe.bits/8);
     }
     break :blk max_size;
 };
@@ -51,11 +52,16 @@ fn worker(shared: *Shared) !void {
             rem_size -= weight_size;
             const weights = try weight_reader.interface.take(weight_size);
 
-            // FAST PATH (not quantized weights)
-            const scheme = layer.scheme orelse {
+            // FAST PATH (skip unknown)
+            const scheme = layer.scheme orelse { //TODO: rearrange
                 std.mem.doNotOptimizeAway(weights); // endpoint
                 continue;
             };
+            const recipe = types.Scheme.RECIPE.get(scheme);
+            if (recipe.scale == null and recipe.weight == shared.out_t and layer.global_scale == 1.0) {
+                std.mem.doNotOptimizeAway(weights); //endpoint
+                continue;
+            }
 
             // DEQUANT
             const weight_bits: usize = types.Dtype.RECIPE.get(
@@ -65,9 +71,9 @@ fn worker(shared: *Shared) !void {
                 weight_size / scheme.BlockSize() * scheme.ScaleSize(),
             );
             const out = out_buf[0 .. weight_size * 8 // bytes -> bits
-            / weight_bits // how many weights
-            * out_bits // output bits
-            / 8 // bytes
+                / weight_bits // how many weights
+                * out_bits // output bits
+                / 8 // bytes
             ];
 
             dequant.dequant(scheme, shared.out_t, .{
@@ -106,7 +112,7 @@ inline fn flags(gpa: std.mem.Allocator, args: std.process.Args.Iterator) !Args {
     //DEQUANT TYPE
     const out_t =
         std.meta.stringToEnum(types.Dtype, rest.items[rest.items.len - 2]) orelse
-            @panic("Args: Unknown output type");
+        @panic("Args: Unknown output type");
 
     //THREADPOOL
     const threads =
@@ -289,7 +295,7 @@ test "safetensors: parseJson" {
 
     const bias = layers[1];
     try std.testing.expectEqualStrings("fc.bias", bias.name);
-    try std.testing.expectEqual(null, bias.scheme);
+    try std.testing.expectEqual(.f32, bias.scheme.?);
     try std.testing.expectEqualSlices(u64, &.{2}, bias.shape);
     try std.testing.expectEqual(start + 22, bias.weight_offset);
     try std.testing.expectEqual(8, bias.weight_size);

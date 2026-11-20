@@ -31,7 +31,7 @@ const std = @import("std");
 //  q = shuffle(u8, lo, hi, i%2); // 0x0L, 0x0H, 0x0L, 0x0H (L first because little endian)
 //
 //1) std affine s(q-z)
-//  bias = -@as(f32, @floatfromint(z)) * s      // negative because we goes from s(q-z) to qs-zs  (fma setup)
+//  bias = -@as(f32, @floatfromint(z)) * s      // negative because we goes from s(q-z) to qs-zs
 //  return FMA(type_o, @FloatFromInt(q), @splat(s), @splat(b))
 //
 //2) RTN s*q
@@ -43,6 +43,7 @@ const std = @import("std");
 
 pub const Dtype = enum { 
     f4e2m1,
+    i4,
     f8e4m3,
     f8e8m0,
     f16,
@@ -53,27 +54,34 @@ pub const Dtype = enum {
         float,      // sign + exp + mant; decoded through f16
         exponent,   // e8m0; decoded via shift in f32
         native,     // f16|bf16|f32, widen|shift|bitcast
-        integer,
+        integer,    // offset value - bias
+    };
+
+    pub const ExpMode = enum(u8) {
+        ieee,       // exp all ones -> inf|nan; overflow inf
+        fn_nan,     // S.FFFF.. -> nan; overflow max
+        none,       // finite; overflow max
     };
 
     pub const Recipe = struct { //TODO rename
         header: ?[]const u8, // "dtype" given as str in header
+        max: f32,
         bits: u8,
         exp_bits: u8,
         mant_bits: u8,
         bias: u8,
         kind: Kind, // type of logic
-        encodable: bool,
-        decodable: bool,
+        expmode: ExpMode,
     };
 
     pub const RECIPE = std.EnumArray(Dtype, Recipe).init(.{
-        .f4e2m1 = .{ .header = null, .bits = 4, .exp_bits = 2, .mant_bits = 1, .bias = 1, .kind = .float, .decodable = true, .encodable = false }, //"U8"
-        .f8e4m3 = .{ .header = "F8_E4M3", .bits = 8, .exp_bits = 4, .mant_bits = 3, .bias = 7, .kind = .float, .decodable = true, .encodable = false },
-        .f8e8m0 = .{ .header = "U8", .bits = 8, .exp_bits = 8, .mant_bits = 0, .bias = 127, .kind = .exponent, .decodable = true, .encodable = false },
-        .f16    = .{ .header = "F16", .bits = 16, .exp_bits = 5, .mant_bits = 10, .bias = 15, .kind = .native, .decodable = true, .encodable = true },
-        .bf16   = .{ .header = "BF16", .bits = 16, .exp_bits = 8, .mant_bits = 7, .bias = 127, .kind = .native, .decodable = true, .encodable = true },
-        .f32    = .{ .header = "F32", .bits = 32, .exp_bits = 8, .mant_bits = 23, .bias = 127, .kind = .native, .decodable = true, .encodable = true },
+        .f4e2m1 = .{ .header = null, .max = 6.0, .bits = 4, .exp_bits = 2, .mant_bits = 1, .bias = 1, .kind = .float, .expmode = .none}, //"U8"
+        .i4     = .{ .header = null, .max = 7.0, .bits = 4, .exp_bits = 0, .mant_bits = 0, .bias = 8, .kind = .integer, .expmode = .none },
+        .f8e4m3 = .{ .header = "F8_E4M3", .max = 448.0, .bits = 8, .exp_bits = 4, .mant_bits = 3, .bias = 7, .kind = .float, .expmode = .fn_nan },
+        .f8e8m0 = .{ .header = "U8", .max = 0x1p127, .bits = 8, .exp_bits = 8, .mant_bits = 0, .bias = 127, .kind = .exponent, .expmode = .fn_nan },
+        .f16    = .{ .header = "F16", .max = 65504.0, .bits = 16, .exp_bits = 5, .mant_bits = 10, .bias = 15, .kind = .native, .expmode = .ieee },
+        .bf16   = .{ .header = "BF16", .max = 0x1.FEp127, .bits = 16, .exp_bits = 8, .mant_bits = 7, .bias = 127, .kind = .float, .expmode = .ieee },
+        .f32    = .{ .header = "F32", .max = 0x1.FFFFFEp127, .bits = 32, .exp_bits = 8, .mant_bits = 23, .bias = 127, .kind = .native, .expmode = .ieee },
     });
 
     pub fn NameToDtype(name: []const u8) ?Dtype {
@@ -84,14 +92,6 @@ pub const Dtype = enum {
         return null;
     }
 
-    pub fn Storage(comptime output_t: Dtype) type {
-        return switch (output_t) {
-            .f16 => f16,
-            .f32 => f32,
-            .bf16 => u16,
-            else => @compileError("Storage: not encodable"),
-        }; //TODO: do smth
-    }
 };
 
 
@@ -99,6 +99,11 @@ pub const Dtype = enum {
 pub const Scheme = enum {
     nvfp4,
     mxfp4,
+    i4,
+    f8e4m3,
+    f16,
+    bf16,
+    f32,
 
     pub const Translation = enum {
         affine, // s(q-z)
@@ -106,16 +111,21 @@ pub const Scheme = enum {
     };
 
     pub const Recipe = struct {
+        absmax: f32,
         block: u32,
         weight: Dtype,
-        scale: Dtype,
+        scale: ?Dtype,
         global_scale: bool,
-        translation: Translation,
     };
     
     pub const RECIPE = std.EnumArray(Scheme, Recipe).init(.{
-        .nvfp4 = .{ .weight = .f4e2m1, .scale = .f8e4m3, .block = 16, .global_scale = true, .translation = .RTN },
-        .mxfp4 = .{ .weight = .f4e2m1, .scale = .f8e8m0, .block = 32, .global_scale = false, .translation = .RTN },
+        .nvfp4  = .{ .weight = .f4e2m1, .scale = .f8e4m3, .block = 16, .global_scale = true, .absmax = 6.0 },
+        .mxfp4  = .{ .weight = .f4e2m1, .scale = .f8e8m0, .block = 32, .global_scale = false, .absmax = 4.0 },
+        .i4     = .{ .weight = .i4, .scale = .bf16, .block = 128, .global_scale = false, .absmax = 7.0 },
+        .f8e4m3 = .{ .weight = .f8e4m3, .scale = null, .block = 32, .global_scale = true, .absmax = 448.0 },
+        .f16    = .{ .weight = .f16, .scale = null, .block = 32, .global_scale = false, .absmax = 0.0 },
+        .bf16   = .{ .weight = .bf16, .scale = null, .block = 32, .global_scale = false, .absmax = 0.0 },
+        .f32    = .{ .weight = .f32, .scale = null, .block = 32, .global_scale = false, .absmax = 0.0 },
     });
 
     pub fn ScaleToScheme(scale: Dtype) ?Scheme {
@@ -125,13 +135,22 @@ pub const Scheme = enum {
         return null;
     }
 
+    pub fn DtypeToScheme(dtype: Dtype) ?Scheme {
+        for (std.enums.values(Scheme)) |scheme| {
+            const recipe = RECIPE.get(scheme);
+            if (recipe.scale == null and recipe.weight == dtype) return scheme;
+        }
+        return null;
+    }
+
     pub fn BlockSize(scheme: Scheme) usize {
-        const recipe = RECIPE.get(scheme); //Scheme
+        const recipe = RECIPE.get(scheme);
         return recipe.block * Dtype.RECIPE.get(recipe.weight).bits / 8;
     }
 
     pub fn ScaleSize(scheme: Scheme) usize {
-        return Dtype.RECIPE.get(RECIPE.get(scheme).scale).bits / 8;
+        const scale_t = RECIPE.get(scheme).scale orelse return 0;
+        return Dtype.RECIPE.get(scale_t).bits / 8;
     }
 };
 
