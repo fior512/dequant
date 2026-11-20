@@ -1,19 +1,50 @@
 const std = @import("std");
 const types = @import("types.zig");
 
-pub inline fn unpack(comptime format: types.Dtype.Recipe, comptime count: usize, bytes: *const [count * format.bits / 8]u8) @Vector(count, u8) {
-    switch (format.bits) {
+
+
+pub inline fn pack(comptime out_t: types.Dtype.Recipe, comptime count: usize, values: @Vector(count, u32)) [count * out_t.bits / 8]u8 {
+    switch (out_t.bits) {
+        4 => {
+            const Half = @Vector(count/2, u8);
+            const unpacked: @Vector(count, u8) = @truncate(values);
+            const even, const odd = comptime blk: {
+                var even_mask: [count/2]i32 = undefined;
+                var odd_mask: [count/2]i32 = undefined;
+                for (&even_mask, &odd_mask, 0..) |*even, *odd, idx| {
+                    even.* = @intCast(2 * idx);
+                    odd.* = @intCast(2 * idx + 1);
+                }
+                break :blk .{ even_mask, odd_mask };
+            };
+
+            const lo: Half = @shuffle(u8, unpacked, undefined, even);
+            const hi: Half = @shuffle(u8, unpacked, undefined, odd);
+            return lo | (hi << @splat(4));
+        },
+        else => {
+            const Int = @Int(.unsigned, out_t.bits);
+            const Bytes = @Vector(count * out_t.bits / 8, u8);
+            const unpacked: @Vector(count, Int) = @truncate(values);
+            return @as(Bytes, @bitCast(unpacked));
+        },
+    }
+}
+
+
+pub inline fn unpack(comptime out_t: types.Dtype.Recipe, comptime count: usize, bytes: *const [count * out_t.bits / 8]u8) @Vector(count, @Int(.unsigned, @max(8, out_t.bits))) {
+    switch (out_t.bits) {
         4 => {
             const Half = @Vector(count/2, u8);
             const packed_w: Half = bytes.*;
 
-            const lo = packed_w & @as(Half, @splat(0x0F)); // 0x0L, 0x0L, ..
-            const hi = packed_w >> @as(Half, @splat(4));   // 0x0H, 0x0H, ..
+            const lo: Half = packed_w & @as(Half, @splat(0x0F)); // 0x0L, 0x0L, ..
+            const hi: Half = packed_w >> @as(Half, @splat(4));   // 0x0H, 0x0H, ..
             const interleaved = comptime blk: {
                 var mask: [count]i32 = undefined;
                 for(&mask, 0..) |*lane, idx| {
                     const half_idx: i32 = @intCast(idx/2);
-                    lane.* = if (idx%2 == 0) half_idx else ~half_idx;   // `~` is used a sign swap (signed int)
+                    lane.* = if (idx%2 == 0) half_idx else ~half_idx;   // `~` to sign swap (signed int)
                                                                         // lane.* > 0 -> a
                                                                         // lane.* < 0 -> b
                 }
@@ -24,8 +55,8 @@ pub inline fn unpack(comptime format: types.Dtype.Recipe, comptime count: usize,
         },
         8 => return bytes.*,
         else => {
-            const Int = @Int(.unsigned, format.bits);
-            const size = format.bits / 8;
+            const Int = @Int(.unsigned, out_t.bits);
+            const size = out_t.bits / 8;
             var out: @Vector(count, Int) = undefined;
             inline for (0..count) |idx| out[idx] = std.mem.readInt(Int, bytes[idx*size..][0..size], .little);
             return out;
@@ -34,16 +65,20 @@ pub inline fn unpack(comptime format: types.Dtype.Recipe, comptime count: usize,
 }
 
 // decode for E_M_ types
-pub inline fn decode(comptime format: types.Dtype.Recipe, comptime count: usize, elements: anytype) @Vector(count, f32) {
+pub inline fn decode(comptime out_t: types.Dtype.Recipe, comptime count: usize, values: anytype) @Vector(count, f32) {
     const Lanes = @Vector(count, u32);
     const Floats = @Vector(count, f32);
-    const wide: Lanes = elements; // 8bits -> 32
+    const wide: Lanes = values; // 8bits -> 32
     
 
-    const t_size = 1 << format.bits;
+    const t_size = 1 << out_t.bits;
+    if (comptime count == 1 and out_t.bits <= 8) if (!@inComptime()) { // scalar
+        const TABLE: [t_size]f32 = comptime tableTranslate(out_t);
+        return @splat(TABLE[wide[0]]);
+    };
     const reg_units = comptime @min(t_size, std.simd.suggestVectorLength(u32) orelse 1);
-    if (comptime t_size <= 2 * reg_units) if (!@inComptime()) { // Q:fit in 2 registers? (hi,lo)
-        const TABLE: [t_size]f32 = comptime tableTranslate(format);
+    if (comptime t_size <= 2 * reg_units) if (!@inComptime()) { // SIMD Q:fit in 2 registers? (hi,lo)
+        const TABLE: [t_size]f32 = comptime tableTranslate(out_t);
         
         const idx = wide & @as(Lanes, @splat(reg_units - 1));
 
@@ -59,33 +94,14 @@ pub inline fn decode(comptime format: types.Dtype.Recipe, comptime count: usize,
         return @select(f32, wide >= @as(Lanes, @splat(reg_units)), hi, lo);
     };
 
-    switch (format.kind) {
-        .float => {
-            // element: [sign | exp | mant]
-            // value:   significand * 2^(exp - bias - mant)
-            //          significand = 1.mant (1 is not in bits)
-            //
-            //  f32: S1E8M23
-
-            const zero: Lanes = @splat(0);
-            
+    switch (out_t.kind) {
+        .float => { // element: [sign | exp | mant]
             // Extract
-            const sign = (wide >> @splat(format.bits-1)) << @splat(31); // pre-setup Big endian i32
-            const exp = (wide >> @splat(format.mant_bits)) & @as(Lanes, @splat((1 << format.exp_bits) - 1));
-            const mant = wide & @as(Lanes, @splat((1 << format.mant_bits) - 1));
-
-            // Translate
-            const implicit = @select(u32, exp != zero, @as(Lanes, @splat(1 << format.mant_bits)), zero); // implicit only when `exp` exist
-            const significand: Floats = @floatFromInt(implicit | mant);
-            const exp_off = 127 - @as(u32, format.bias) - format.mant_bits; // exp offset in f32 
-            const power: Floats = @bitCast(
-                (@max(
-                    exp,
-                    @as(Lanes, @splat(1))) + @as(Lanes, @splat(exp_off))
-                ) << @splat(23),
-            );
-
-            const magnitude: Lanes = @bitCast(significand * power);
+            const sign = (wide >> @splat(out_t.bits-1)) << @splat(31);
+            const abs = wide & @as(Lanes, @splat((1 << (out_t.bits - 1)) - 1));
+            const shifted: Floats = @bitCast(abs << @splat(23 - out_t.mant_bits));
+            const bias: f32 = @bitCast(@as(u32, 254 - @as(u32, out_t.bias)) << 23);
+            const magnitude: Lanes = @bitCast(shifted * @as(Floats, @splat(bias)));
             return @bitCast(sign | magnitude);
         },
         .exponent => {
@@ -95,40 +111,64 @@ pub inline fn decode(comptime format: types.Dtype.Recipe, comptime count: usize,
             const bits = @select(u32, wide == @as(Lanes, @splat(0xFF)), @as(Lanes, @splat(0x7FC00000)), lo);
             return @bitCast(bits);
         },
-        .native => @compileError("decode: weight dtype"),
-        .integer => return @floatFromInt(wide),
-    }
-}
-
-
-pub inline fn encode(comptime dtype: types.Dtype, comptime count: usize, values: @Vector(count, f32)) [count]types.Dtype.Storage(dtype) {
-    switch (dtype) {
-        .f16 => return @as(@Vector(count, f16), @floatCast(values)),
-        .f32 => return values,
-        .bf16 => {
-            // round [u16 high][u16 low] to [u16 high] via "rotary counter" logic
-            // f32  (in_t) is E8M23
-            // bf16 (out_t) is E8M7 (mantissa is little-side, so trunc low-u16)
-            // only rounding + trunc(low u16) is necessary
-            const Lanes = @Vector(count, u32);
-            const bits: Lanes = @bitCast(values);
-            const midbit = (bits >> @splat(16)) & @as(Lanes, @splat(1)); // extract lsb high-u16 as lsb low-u16
-                                                                         // used for even/odd
-                                                                         // if value is halfway (2..2.5..3) -> round based on even/odd
-            const rounded = bits +% @as(Lanes, @splat(0x7FFF)) +% midbit; // 0x7FFF is u16-1 (midbit extracted)
-                                                                            // by adding midbit, it will "snowball" its way to the upper u16 if round+1 is necessary
-            return @as(@Vector(count, u16), @truncate(rounded >> @splat(16)));
+        .native => {
+            const Float = std.meta.Float(out_t.bits);
+            const Int = @Int(.unsigned, out_t.bits);
+            return @floatCast(@as(@Vector(count, Float), @bitCast(@as(@Vector(count, Int), @truncate(wide)))));
         },
-        else => @compileError("encode: not encodable"),
+        .integer => return @as(Floats, @floatFromInt(wide)) - @as(Floats, @splat(@floatFromInt(out_t.bias))), // x - bias
     }
 }
 
 
-pub fn tableTranslate(comptime format: types.Dtype.Recipe) [1 << format.bits]f32 {
+pub inline fn encode(comptime out_t: types.Dtype.Recipe, comptime count: usize, values: @Vector(count, f32)) @Vector(count, u32) {
+    const Lanes = @Vector(count, u32);
+    const Floats = @Vector(count, f32);
+    switch (out_t.kind) {
+        .native => {
+            const Float = std.meta.Float(out_t.bits);
+            const Int = @Int(.unsigned, out_t.bits);
+            return @as(@Vector(count, Int), @bitCast(@as(@Vector(count, Float), @floatCast(values)))); // f16: vcvtps2ph
+        },
+        .float => {
+            const SHIFT = 23 - out_t.mant_bits; // f32 mantissa
+            const bits: Lanes = @bitCast(values);
+            const sign = (bits >> @splat(31)) << @splat(out_t.bits - 1);
+            var abs_f = @abs(values);
+            if (comptime out_t.expmode != .ieee) abs_f = @min(abs_f, @as(Floats, @splat(out_t.max))); // overflow
+            const abs: Lanes = @bitCast(abs_f);
+
+            // ROUND
+            const midbit = (abs >> @splat(SHIFT)) & @as(Lanes, @splat(1)); // RTNe
+            const rounded = abs +% @as(Lanes, @splat((1 << (SHIFT - 1)) - 1)) +% midbit; // x + (0x8-1) + isOdd
+            const normal = (rounded >> @splat(SHIFT)) -% @as(Lanes, @splat(@as(u32, 127 - out_t.bias) << out_t.mant_bits));
+
+            // SUBNORMAL
+            const MAGIC: f32 = @bitCast(@as(u32, 127 - @as(u32, out_t.bias) + SHIFT + 1) << 23);
+            const subnormal = @as(Lanes, @bitCast(abs_f + @as(Floats, @splat(MAGIC)))) -% @as(Lanes, @splat(@as(u32, @bitCast(MAGIC))));
+            
+            // ENCODE
+            const MIN_NORMAL: f32 = @bitCast(@as(u32, 128 - @as(u32, out_t.bias)) << 23); // 2^(1 - bias)
+            var code = @select(u32, abs_f < @as(Floats, @splat(MIN_NORMAL)), subnormal, normal);
+            if (comptime out_t.expmode == .ieee) code = @min(code, @as(Lanes, @splat(((1 << out_t.exp_bits) - 1) << out_t.mant_bits))); // overflow
+            return sign | code;
+        },
+        .exponent => return (@as(Lanes, @bitCast(values)) >> @splat(23)) & @as(Lanes, @splat(0xFF)), // floor(log2)
+        .integer => {
+            const shifted = @round(values) + @as(Floats, @splat(@floatFromInt(out_t.bias))); // x + bias
+            const clamped = @min(@max(shifted, @as(Floats, @splat(0))), @as(Floats, @splat((1 << out_t.bits) - 1)));
+            return @intFromFloat(clamped);
+        },
+    }
+}
+
+
+
+pub fn tableTranslate(comptime out_t: types.Dtype.Recipe) [1 << out_t.bits]f32 {
     //Produce a lookup table that will be used by both loadScale() and decode()
     @setEvalBranchQuota(1_000_000);
-    const t_size = 1 << format.bits;
-    var elements: [t_size]u8 = undefined;
-    for (&elements, 0..) |*element , idx| element.* = @intCast(idx);
-    return comptime decode(format, t_size, elements);
+    const t_size = 1 << out_t.bits;
+    var values: [t_size]u8 = undefined;
+    for (&values, 0..) |*element , idx| element.* = @intCast(idx);
+    return comptime decode(out_t, t_size, values);
 }

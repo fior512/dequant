@@ -1,5 +1,6 @@
 .zig-cache/
 tags
-.zig-out/
-./bench/out/
-./model/
+zig-out/
+out/
+bench/out/
+models/

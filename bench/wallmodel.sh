@@ -7,6 +7,8 @@ set -- $shards
 first=$1
 model_name=$(basename "$(dirname "$first")")
 time_file="bench/out/gptoss_time_$$"
+prefix="bench/out/release" # private install: a concurrent `zig build` (Debug) cannot swap the binary
+bin="$prefix/bin/dequant"
 
 measure_total_ms() {
   type=$1
@@ -14,7 +16,7 @@ measure_total_ms() {
   min_s=999999
   i=0
   while [ "$i" -lt 3 ]; do
-    /usr/bin/time -f '%e %M' -o "$time_file" zig-out/bin/dequant $shards "$type" "$threads" >/dev/null 2>&1
+    /usr/bin/time -f '%e %M' -o "$time_file" "$bin" $shards "$type" "$threads" >/dev/null 2>&1
     t=$(awk '{print $1}' "$time_file")
     min_s=$(awk -v a="$min_s" -v b="$t" 'BEGIN{print (b<a)?b:a}')
     i=$((i+1))
@@ -23,7 +25,8 @@ measure_total_ms() {
 }
 
 # build native once
-zig build -Doptimize=ReleaseFast -Dcpu=native
+mkdir -p bench/out
+zig build -Doptimize=ReleaseFast -Dcpu=native --prefix "$prefix"
 
 # model stats
 input_bytes=0
@@ -52,21 +55,21 @@ for f in $shards; do
   blocks_bytes=$((blocks_bytes + b))
 done
 weights_count=$((blocks_bytes * 2))
-f32_out_bytes=$((blocks_bytes * 2 * 4))
 
 echo "# $model_name, min of 3 whole-model runs"
 echo "| out_t | 1t | 6t | 12t | GB/s in (6t) | GB/s out (6t) | qw/s (6t) |"
 echo "|---|---|---|---|---|---|---|"
-for type in f32 f16 bf16; do
+for type in f32 f16 bf16 f8e4m3 f8e8m0 i4 f4e2m1; do
   case "$type" in
-    f32) out_elem=4 ;;
-    f16) out_elem=2 ;;
-    bf16) out_elem=2 ;;
+    f32)                out_bits=32 ;;
+    f16 | bf16)         out_bits=16 ;;
+    f8e4m3 | f8e8m0)    out_bits=8 ;;
+    i4 | f4e2m1)        out_bits=4 ;;
   esac
   t1=$(measure_total_ms "$type" 1)
   t6=$(measure_total_ms "$type" 6)
   t12=$(measure_total_ms "$type" 12)
-  out_bytes=$((blocks_bytes * 2 * out_elem))
+  out_bytes=$((weights_count * out_bits / 8))
   gb_in=$(awk -v b="$input_bytes" -v t="$t6" 'BEGIN{printf "%.1f", b*1e-6/t}')
   gb_out=$(awk -v b="$out_bytes" -v t="$t6" 'BEGIN{printf "%.1f", b*1e-6/t}')
   qw=$(awk -v w="$weights_count" -v t="$t6" 'BEGIN{printf "%.1f", w*1e-6/t}')
@@ -74,18 +77,16 @@ for type in f32 f16 bf16; do
 done
 
 echo ""
-echo "# xychart: $model_name f32, throughput vs threads"
+echo "# xychart: $model_name, GB/s in vs threads, one line per out_t"
 echo "threads: 1 2 3 4 6 8 12"
-in_line=""
-out_line=""
-for t in 1 2 3 4 6 8 12; do
-  ms=$(measure_total_ms f32 "$t")
-  gb_in=$(awk -v b="$input_bytes" -v t="$ms" 'BEGIN{printf "%.1f", b*1e-6/t}')
-  gb_out=$(awk -v b="$f32_out_bytes" -v t="$ms" 'BEGIN{printf "%.1f", b*1e-6/t}')
-  in_line="$in_line$gb_in "
-  out_line="$out_line$gb_out "
+for type in f4e2m1 i4 f8e4m3 f8e8m0 f16 bf16 f32; do
+  in_line=""
+  for t in 1 2 3 4 6 8 12; do
+    ms=$(measure_total_ms "$type" "$t")
+    gb_in=$(awk -v b="$input_bytes" -v t="$ms" 'BEGIN{printf "%.1f", b*1e-6/t}')
+    in_line="$in_line${in_line:+, }$gb_in"
+  done
+  printf '%-6s [%s]\n' "$type" "$in_line"
 done
-echo "in  [$in_line]"
-echo "out [$out_line]"
 
 rm -f "$time_file"

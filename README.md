@@ -5,9 +5,13 @@ gpt-oss-20b (`openai/gpt-oss-20b`, 12.8 GiB, MXFP4 experts) on Ryzen 5 7600X:
 
 | out_t | 1t | 6t | 12t | GB/s in (6t) | GB/s out (6t) | qw/s (6t) |
 |---|---|---|---|---|---|---|
-| f32 | 1490 ms | 360 ms | 350 ms | 38.2 | 212.3 | 53.1 G |
-| f16 | 1800 ms | 410 ms | 340 ms | 33.6 | 93.2 | 46.6 G |
-| bf16 | 2380 ms | 520 ms | 450 ms | 26.5 | 73.5 | 36.8 G |
+| f32 | 1510 ms | 360 ms | 380 ms | 38.2 | 212.3 | 53.1 G |
+| f16 | 1840 ms | 420 ms | 380 ms | 32.8 | 91.0 | 45.5 G |
+| bf16 | 3400 ms | 700 ms | 630 ms | 19.7 | 54.6 | 27.3 G |
+| f8e4m3 | 3770 ms | 800 ms | 700 ms | 17.2 | 23.9 | 23.9 G |
+| f8e8m0 | 1770 ms | 410 ms | 360 ms | 33.6 | 46.6 | 46.6 G |
+| i4 | 3390 ms | 720 ms | 640 ms | 19.1 | 13.3 | 26.5 G |
+| f4e2m1 | 4210 ms | 890 ms | 790 ms | 15.5 | 10.7 | 21.5 G |
 
 ## Usage
 
@@ -23,10 +27,14 @@ Recognized tensor layouts (`src/safetensors.zig`, `HEADERS`):
 | NVFP4 (1) | U8 | F8_E4M3 | F32 |
 | NVFP4 (2) | U8 | F8_E4M3 | F32 (inv) |
 | MXFP4 (3) | U8 | U8 (E8M0) | none |
+| INT4 W4A16 (2) | I32 | BF16 | none |
+| FP8 (1)(2) | F8_E4M3 | F32 (scalar) | none |
+| plain | F32 / F16 / BF16 / F8_E4M3 | none | none |
 
 > 1. https://github.com/NVIDIA/Model-Optimizer
 > 2. https://github.com/vllm-project/compressed-tensors
 > 3. https://huggingface.co/openai/gpt-oss-20b
+
 
 ## Pipeline
 
@@ -40,11 +48,12 @@ worker
   read -> dequant -> `doNotOptimizeAway()`
 
 dequant block
-  unpack     [n/2]u8 -> [n]u8       lo/hi shuffle
+  unpack                            lo/hi shuffle
   decode     e_m_ -> f32
   loadScale  e_m_ -> f32            lookup translate
   translate  f32                    RTN | std-affine         
   encode     f32 -> out_t           f32 | f16 | bf16
+  pack                              lo/hi shuffle
 ```
 The quantization pipeline is modular through `types.Dtype.RECIPE` and `types.Scheme.RECIPE` which holds type recipies. All threads reuse their buffer, kept via `doNotOptimizeAway`.
 
@@ -83,16 +92,26 @@ hf download openai/gpt-oss-20b --include "model-*.safetensors" --local-dir model
 ### Thread scaling
 
 ```mermaid
-%%{init: {"themeVariables": {"xyChart": {"plotColorPalette": "#2a78d6, #FF9900"}}}}%%
+%%{init: {"themeVariables": {"xyChart": {"plotColorPalette": "#2a78d6, #FF9900, #2ca02c, #d62728, #9467bd, #8c564b, #e377c2"}}}}%%
 xychart-beta
-    title "gpt-oss-20b f32, throughput vs threads"
+    title "gpt-oss-20b, GB/s in vs threads"
     x-axis "threads" ["1", "2", "3", "4", "6", "8", "12"]
-    y-axis "GB/s" 0 --> 260
-    line [9.2, 17.2, 24.1, 31.3, 38.2, 43.0, 40.5]
-    line [51.0, 95.6, 134.1, 173.7, 212.3, 238.9, 224.8]
+    y-axis "GB/s in" 0 --> 45
+    line [9.1, 17.4, 24.1, 30.6, 38.2, 39.3, 36.2]
+    line [7.5, 14.5, 20.2, 26.0, 32.8, 33.6, 35.3]
+    line [4.0, 7.7, 11.1, 14.8, 19.7, 20.5, 22.2]
+    line [7.8, 15.0, 21.2, 27.0, 33.6, 36.2, 37.2]
+    line [3.7, 7.1, 10.2, 13.5, 17.2, 18.6, 19.9]
+    line [4.1, 7.9, 11.4, 15.0, 19.1, 19.7, 21.5]
+    line [3.3, 6.3, 9.2, 12.1, 15.6, 16.4, 17.4]
 ```
-- blue: GB/s in
-- orange: GB/s out
+- blue: f32
+- orange: f16
+- green: bf16
+- red: f8e8m0
+- purple: f8e4m3
+- brown: i4
+- pink: f4e2m1
 
 
 **Scaling:**
@@ -125,7 +144,9 @@ Output f32, 1 thread, kernels only (no file read, parse or orchestration). Media
 ## TODO
 
 - Work item = chunk, not layer
-- swap `vcvtps2ph` for `vcvtneps2bf16`
+- sort layers for latency tail
+- swap `vcvtps2ph`
 - more layouts
-- gpt-oss-120b
+- gpt-oss-120b (deferred load)
 - skip read if unquantized to avoid _copy_to_iter
+- tail is dropped
